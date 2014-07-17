@@ -41,13 +41,16 @@ class NumberPayingUsers(ctx: SparkContext) extends Actor with ActorLogging with 
     client.close()
   }
 
-   def executeJob(inputCollection: String, outputCollection: String): Future[Unit] = {
+   def executeJob(
+     inputCollection: String,
+     outputCollection: String,
+     lowerDate: Date,
+     upperDate: Date
+   ): Future[Unit] = {
     val promise = Promise[Unit]
     val inputUri = s"${URI}.${inputCollection}"
     val outputUri = s"${URI}.${outputCollection}"
     val df = new SimpleDateFormat("yyyy/MM/dd")
-    val beginDate = new Date //df.parse(inputData.tail.tail.head)
-    val endDate = new Date //df.parse(inputData.last)
 
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
@@ -80,7 +83,7 @@ class NumberPayingUsers(ctx: SparkContext) extends Actor with ActorLogging with 
       })).groupByKey().count()
 
       println(s"NUMBER OF PAYING USERS $payingUsers")
-      saveResultToDatabase(URI, outputCollection, payingUsers.toInt, beginDate, endDate)
+      saveResultToDatabase(URI, outputCollection, payingUsers.toInt, lowerDate, upperDate)
       promise.success()
     } else {
       println("count is zero")
@@ -91,10 +94,17 @@ class NumberPayingUsers(ctx: SparkContext) extends Actor with ActorLogging with 
   }
 
   def receive = {
-    case (companyName: String, applicationName: String) => {
+    case (
+      companyName: String,
+      applicationName: String,
+      lowerDate: Date,
+      upperDate: Date
+    ) => {
       executeJob(
         getCollectionInput(companyName, applicationName),
-        getCollectionOutput(companyName, applicationName)
+        getCollectionOutput(companyName, applicationName),
+        lowerDate,
+        upperDate
       ) map {res =>
         println("SUCCESS")
       }

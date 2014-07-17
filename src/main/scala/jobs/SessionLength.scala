@@ -40,14 +40,18 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
     client.close()
   }
 
-  private def executeJob(inputCollection: String, outputCollection: String): Future[Unit] = {
+  private def executeJob(
+    inputCollection: String,
+    outputCollection: String,
+    lowerDate: Date,
+    upperDate: Date
+    
+  ): Future[Unit] = {
     val promise = Promise[Unit]
     val uri = URI
     val inputUri = s"${uri}.${inputCollection}"
     val outputUri = s"${uri}.${outputCollection}"
     val df = new SimpleDateFormat("yyyy/MM/dd")
-    val beginDate = new Date //df.parse(inputData.tail.tail.head)
-    val endDate = new Date //df.parse(inputData.last)
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.output.uri", outputUri)
@@ -78,7 +82,7 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
         arg._2.get("sessionLength").toString.toDouble
       }).reduce(_ + _)) / count
 
-      saveResultToDatabase(uri, outputCollection, averageSessionLength, beginDate, endDate)
+      saveResultToDatabase(uri, outputCollection, averageSessionLength, lowerDate, upperDate)
       println("average session length " + averageSessionLength)
       promise.success()
     } else {
@@ -90,10 +94,17 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
   }
 
   def receive = {
-    case (companyName: String, applicationName: String) => {
+    case (
+      companyName: String,
+      applicationName: String,
+      lowerDate: Date,
+      upperDate: Date
+    ) => {
       executeJob(
         getCollectionInput(companyName, applicationName),
-        getCollectionOutput(companyName, applicationName)
+        getCollectionOutput(companyName, applicationName),
+        lowerDate,
+        upperDate
       ) map {res =>
         println("SUCCESS")
       }  

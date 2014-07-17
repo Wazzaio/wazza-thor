@@ -2,12 +2,15 @@ package wazza.io //TODO CHANGE TO io.wazza
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import io.wazza.jobs._
 import org.apache.spark._
+import org.joda.time.DateMidnight
+import org.joda.time.DateTime
 import scala.collection.mutable.ListBuffer
 import com.mongodb.BasicDBObject
 import com.mongodb.MongoClient
 import com.mongodb.MongoClientURI
 import scala.collection.JavaConverters._
 import play.api.libs.json._
+import com.github.nscala_time.time.Imports._
 
 object JobRunner extends App with WazzaContext {
 
@@ -43,13 +46,15 @@ object JobRunner extends App with WazzaContext {
 
   override def main(args: Array[String]): Unit = {
     setup
+    val lower = new DateMidnight()
+    val upper = lower.plusDays(1)
     for {
       c <- getCompanies
       app <- c.apps
       
     } {
       for(actor <- actors) {
-        actor.execute(c.name, app)
+        actor.execute(c.name, app, lower.toDate, upper.toDate)
       }
     }
 	}

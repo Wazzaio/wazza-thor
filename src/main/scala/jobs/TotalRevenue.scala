@@ -41,14 +41,16 @@ class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with Wazza
     client.close()
   }
 
-  private def executeJob(inputCollection: String, outputCollection: String): Future[Unit] = {
+  private def executeJob(
+    inputCollection: String,
+    outputCollection: String,
+    lowerDate: Date,
+    upperDate: Date
+  ): Future[Unit] = {
     val promise = Promise[Unit]
     val inputUri = s"${URI}.${inputCollection}"
     val outputUri = s"${URI}.${outputCollection}"
     val df = new SimpleDateFormat("yyyy/MM/dd")
-    val beginDate = new Date //df.parse(inputData.tail.tail.head)
-    val endDate = new Date //df.parse(inputData.last)
-
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.output.uri", outputUri)
@@ -79,7 +81,7 @@ class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with Wazza
         price
       }).reduce(_ + _)
 
-      saveResultToDatabase(URI, outputCollection, totalRevenue, beginDate, endDate)
+      saveResultToDatabase(URI, outputCollection, totalRevenue, lowerDate, upperDate)
       promise.success()
     } else  {
       promise.failure(new Exception)
@@ -89,10 +91,17 @@ class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with Wazza
   }
 
   def receive = {
-    case (companyName: String, applicationName: String) => {
+    case (
+      companyName: String,
+      applicationName: String,
+      lowerDate: Date,
+      upperDate: Date
+    ) => {
       executeJob(
         getCollectionInput(companyName, applicationName),
-        getCollectionOutput(companyName, applicationName)
+        getCollectionOutput(companyName, applicationName),
+        lowerDate,
+        upperDate
       ) map {res =>
         println("SUCCESS")
       }
