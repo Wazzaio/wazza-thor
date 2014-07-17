@@ -1,3 +1,7 @@
-target/*
+target/
+.ensime
 .ensime_lucene
-  
+.ensime_cache
+lib_managed/
+project/project/
+project/target/
