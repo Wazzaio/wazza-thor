@@ -42,7 +42,6 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
 
   private def executeJob(inputCollection: String, outputCollection: String): Future[Unit] = {
     val promise = Promise[Unit]
-    //val inputData = config.getString("input").split(" ").toSet
     val uri = URI
     val inputUri = s"${uri}.${inputCollection}"
     val outputUri = s"${uri}.${outputCollection}"
@@ -91,12 +90,15 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
   }
 
   def receive = {
-    case (inputCollection: String, outputCollection: String) => {
-      executeJob(inputCollection, outputCollection) map {res =>
+    case (companyName: String, applicationName: String) => {
+      executeJob(
+        getCollectionInput(companyName, applicationName),
+        getCollectionOutput(companyName, applicationName)
+      ) map {res =>
         println("SUCCESS")
       }  
     }
-    case InputCollection => getCollection
+    case InputCollection => println("hey")
   }
 }
 

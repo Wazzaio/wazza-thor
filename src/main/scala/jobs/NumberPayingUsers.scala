@@ -20,8 +20,8 @@ import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 
 class NumberPayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
 
-  override def inputCollectionType: String = "mobileSessions"
-  override def outputCollectionType: String = "SessionLength"
+  override def inputCollectionType: String = "purchases"
+  override def outputCollectionType: String = "numberPayingUsers"
 
   private def saveResultToDatabase(
     uriStr: String,
@@ -91,9 +91,12 @@ class NumberPayingUsers(ctx: SparkContext) extends Actor with ActorLogging with 
   }
 
   def receive = {
-    case (inputCollection: String, outputCollection: String) => {
-      executeJob(inputCollection, outputCollection) map {res =>
-        println(res)
+    case (companyName: String, applicationName: String) => {
+      executeJob(
+        getCollectionInput(companyName, applicationName),
+        getCollectionOutput(companyName, applicationName)
+      ) map {res =>
+        println("SUCCESS")
       }
     }
   }

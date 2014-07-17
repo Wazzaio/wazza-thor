@@ -89,9 +89,12 @@ class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with Wazza
   }
 
   def receive = {
-    case (inputCollection: String, outputCollection: String) => {
-      executeJob(inputCollection, outputCollection) map {res =>
-        println("TOTAL REVENUE SUCCESS")
+    case (companyName: String, applicationName: String) => {
+      executeJob(
+        getCollectionInput(companyName, applicationName),
+        getCollectionOutput(companyName, applicationName)
+      ) map {res =>
+        println("SUCCESS")
       }
     }
   }

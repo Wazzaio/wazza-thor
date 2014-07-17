@@ -13,6 +13,11 @@ libraryDependencies += "org.mongodb" % "mongo-java-driver" % "2.11.4"
 
 libraryDependencies += "com.typesafe.akka" %% "akka-actor" % "2.3.1"
 
+libraryDependencies += "com.typesafe.play" %% "play-json" % "2.2.1"
+
 retrieveManaged := true
 
 resolvers += "Akka Repository" at "http://repo.akka.io/releases/"
+
+resolvers += "Typesafe Repo" at "http://repo.typesafe.com/typesafe/releases/"
+
