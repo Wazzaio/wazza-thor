@@ -42,37 +42,15 @@ object JobRunner extends App with WazzaContext {
   }
 
   override def main(args: Array[String]): Unit = {
-    getCompanies
-    /**
-    val companies = List("CompanyTest")
-    val apps = List("RecTestApp")
     setup
     for {
-      c <- companies
-      app <- apps //e funcao de companies
+      c <- getCompanies
+      app <- c.apps
       
     } {
-      println(c)
-      println(app)
-      println(actors)
       for(actor <- actors) {
-        actor.execute(c, app)
+        actor.execute(c.name, app)
       }
     }
-      * */
-
-    /**
-		val system = ActorSystem("analytics")
-    val conf = new SparkConf().setAppName("Wazza Analytics").setMaster("local").set("spark.scheduler.mode", "FAIR")
-    val sc = new SparkContext(conf)
-		val sessionLengthActor = system.actorOf(Props(new SessionLength(sc)), name = "sessionLength")
-	  val inputCollection = "CompanyTest_mobileSessions_RecTestApp"
-	  val outputCollection = "CompanyTest_SessionLength_RecTestApp"
-	  sessionLengthActor ! (inputCollection, outputCollection)
-    val i = "CompanyTest_purchases_RecTestApp"
-    val o = "CompanyTest_TotalRevenue_RecTestApp"
-    val totalRevenueActor = system.actorOf(Props(new TotalRevenue(sc)), name = "totalRevenue")
-    totalRevenueActor ! (i, o)
-      * */
 	}
 }
