@@ -10,7 +10,7 @@ class ActorContext(actor: ActorRef) {
     lowerDate: Date,
     upperDate: Date
   ) = {
-    actor ! (companyName, applicationName)
+    actor ! (companyName, applicationName, lowerDate, upperDate)
   }
 }
 
