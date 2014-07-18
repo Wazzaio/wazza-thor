@@ -21,7 +21,7 @@ import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
 
   override def inputCollectionType: String = "mobileSessions"
-  override def outputCollectionType: String = "SessionLength"
+  override def outputCollectionType: String = "activeUsers"
 
   private def saveResultToDatabase(
     uriStr: String,
@@ -34,7 +34,7 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
     val client = new MongoClient(uri)
     val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
     val result = new BasicDBObject
-    result.put("payingUsers", payingUsers)
+    result.put("activeUsers", payingUsers)
     result.put("lowerDate", lowerDate)
     result.put("upperDate", upperDate)
     collection.insert(result)
@@ -81,7 +81,7 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
         (arg._2.get("userId"), 1)
       })).groupByKey().count()
 
-      println(s"NUMBER OF PAYING USERS $payingUsers")
+      println(s"NUMBER OF ACTIVE USERS $payingUsers")
       saveResultToDatabase(URI, outputCollection, payingUsers.toInt, lowerDate, upperDate)
       promise.success()
     } else {
