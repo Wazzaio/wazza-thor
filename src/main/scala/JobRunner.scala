@@ -49,12 +49,12 @@ object JobRunner extends App with WazzaContext {
     val lower = new DateMidnight()
     val upper = lower.plusDays(1)
     for {
-      c <- getCompanies
-      app <- c.apps
+      c <- List("CompanyTest") //getCompanies
+      app <- List("RecTestApp") //c.apps
       
     } {
       for(actor <- actors) {
-        actor.execute(c.name, app, lower.toDate, upper.toDate)
+        actor.execute(c, app, lower.toDate, upper.toDate)
       }
     }
 	}
