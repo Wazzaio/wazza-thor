@@ -34,7 +34,11 @@ object JobRunner extends App with WazzaContext {
 
   private def setup = {
     val system = ActorSystem("analytics")
-    val conf = new SparkConf().setAppName("Wazza Analytics").setMaster("local").set("spark.scheduler.mode", "FAIR")
+    val conf = new SparkConf()
+      .setAppName("Wazza Analytics")
+      .setMaster("local")
+      .set("spark.scheduler.mode", "FAIR")
+      //TODO later .set("log4j.configuration", "/Users/Joao/Wazza/analytics/conf")
     val sc = new SparkContext(conf)
     var buffer = new ListBuffer[ActorContext]
     buffer += new ActorContext(system.actorOf(Props(new SessionLength(sc)), name = "sessionLength"))

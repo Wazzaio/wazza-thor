@@ -17,6 +17,7 @@ import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import org.apache.log4j.Logger
 
 class ItemRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor{
 
@@ -26,21 +27,24 @@ class ItemRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    itemId: String,
-    totalRevenue: Double,
+    elements: Array[(String, Double)],
     lowerDate: Date,
     upperDate: Date
   ) = {
     val uri  = new MongoClientURI(uriStr)
     val client = new MongoClient(uri)
-    val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
-    val result = new BasicDBObject
-    result.put("itemRevenue", totalRevenue)
-    result.put("itemId", itemId)
-    result.put("lowerDate", lowerDate)
-    result.put("upperDate", upperDate)
-    collection.insert(result)
-    client.close()
+    val collection = client.getDB(uri.getDatabase).getCollection(collectionName)
+
+    elements foreach {el: (String, Double) => {
+      val result = new BasicDBObject
+      result.put("itemId", el._1)
+      result.put("itemRevenue", el._2)
+      result.put("lowerDate", lowerDate)
+      result.put("upperDate", upperDate)
+      collection.insert(result)
+    }}
+
+    client.close
   }
 
   private def executeJob(
@@ -78,17 +82,13 @@ class ItemRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
        })**/
 
     if(mongoRDD.count() > 0) {
-      val x = mongoRDD.map(arg => {
+      val itemRevenue = mongoRDD.map(arg => {
         val itemId = arg._2.get("itemId").toString
         val price = arg._2.get("price").toString.toDouble
-        val d = (itemId, price)
-        println(d)
-        d
-      }).groupByKey
-
-      println(x)
-
-      //saveResultToDatabase(URI, outputCollection, "", totalRevenue, lowerDate, upperDate)
+        (itemId, price)
+      }).reduceByKey(_+_).collect().sortBy(- _._2)
+      
+      saveResultToDatabase(URI, outputCollection, itemRevenue, lowerDate, upperDate)
       promise.success()
     } else  {
       promise.failure(new Exception)
@@ -110,7 +110,7 @@ class ItemRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
         lowerDate,
         upperDate
       ) map {res =>
-        println("SUCCESS")
+        println("item revenue job completed")
       }
     }
   }
