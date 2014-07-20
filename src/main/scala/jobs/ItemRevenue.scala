@@ -78,12 +78,17 @@ class ItemRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
        })**/
 
     if(mongoRDD.count() > 0) {
-      val totalRevenue = mongoRDD.map(arg => {
+      val x = mongoRDD.map(arg => {
+        val itemId = arg._2.get("itemId").toString
         val price = arg._2.get("price").toString.toDouble
-        price
-      }).reduce(_ + _)
+        val d = (itemId, price)
+        println(d)
+        d
+      }).groupByKey
 
-      saveResultToDatabase(URI, outputCollection, "", totalRevenue, lowerDate, upperDate)
+      println(x)
+
+      //saveResultToDatabase(URI, outputCollection, "", totalRevenue, lowerDate, upperDate)
       promise.success()
     } else  {
       promise.failure(new Exception)
