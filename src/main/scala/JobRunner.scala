@@ -45,6 +45,7 @@ object JobRunner extends App with WazzaContext {
     buffer += new ActorContext(system.actorOf(Props(new TotalRevenue(sc)), name = "totalRevenue"))
     buffer += new ActorContext(system.actorOf(Props(new NumberPayingUsers(sc)), name = "payingUsers"))
     buffer += new ActorContext(system.actorOf(Props(new ActiveUsers(sc)), name = "activeUsers"))
+    buffer += new ActorContext(system.actorOf(Props(new NumberSessions(sc)), name = "numberSessions"))
     actors = buffer.toList
   }
 
@@ -53,8 +54,8 @@ object JobRunner extends App with WazzaContext {
     val lower = new DateMidnight()
     val upper = lower.plusDays(1)
     for {
-      c <- List("CompanyTest") //getCompanies
-      app <- List("RecTestApp") //c.apps
+      c <- getCompanies
+      app <- c.apps
       
     } {
       for(actor <- actors) {

@@ -17,10 +17,10 @@ import scala.concurrent._
 import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 
-class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
+class NumberSessions(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
 
   def inputCollectionType: String = "mobileSessions"
-  def outputCollectionType: String = "SessionLength"
+  def outputCollectionType: String = "numberSessions"
 
   private def saveResultToDatabase(
     uriStr: String,
@@ -33,7 +33,7 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
     val client = new MongoClient(uri)
     val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
     val result = new BasicDBObject
-    result.put("averageSession", avgSessionLength)
+    result.put("totalSessions", avgSessionLength)
     result.put("lowerDate", lowerDate)
     result.put("upperDate", upperDate)
     collection.insert(result)
@@ -45,7 +45,7 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
     outputCollection: String,
     lowerDate: Date,
     upperDate: Date
-    
+      
   ): Future[Unit] = {
     val promise = Promise[Unit]
     val uri = URI
@@ -64,26 +64,26 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
       classOf[Object],
       classOf[BSONObject]
     )/**.filter((t: Tuple2[Object, BSONObject]) => {
-      val sessionDate = t._2.get("startTime")
-      sessionDate match {
-        case d: Date => {
-          d.compareTo(beginDate) * endDate.compareTo(d) >= 0
-        }
-        case _ => {
-          println(s"error - date class is " + sessionDate.getClass)
-          false
-        }
-      }
-    })**/
+       val sessionDate = t._2.get("startTime")
+       sessionDate match {
+       case d: Date => {
+       d.compareTo(beginDate) * endDate.compareTo(d) >= 0
+       }
+       case _ => {
+       println(s"error - date class is " + sessionDate.getClass)
+       false
+       }
+       }
+       })**/
 
     val count = mongoRDD.count()
     if(count > 0) {
-      val averageSessionLength = (mongoRDD.map(arg => {
-        arg._2.get("sessionLength").toString.toDouble
-      }).reduce(_ + _)) / count
+      val numberSessions = (mongoRDD.map(arg => {
+        (arg._2.get("id"), 1)
+      })).groupByKey().count()
 
-      saveResultToDatabase(uri, outputCollection, averageSessionLength, lowerDate, upperDate)
-      println("average session length " + averageSessionLength)
+      saveResultToDatabase(uri, outputCollection, numberSessions, lowerDate, upperDate)
+      println("Number of sessions " + numberSessions)
       promise.success()
     } else {
       println("count is zero")
@@ -107,9 +107,8 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
         upperDate
       ) map {res =>
         println("SUCCESS")
-      }  
+      }
     }
     case InputCollection => println("hey")
   }
 }
-
