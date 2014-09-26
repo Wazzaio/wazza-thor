@@ -38,10 +38,6 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
       try {
         val uri  = new MongoClientURI(uriStr)
         val client = new MongoClient(uri)
-        println(collectionName)
-        println(payingUsers)
-        println(payingUsers.getClass)
-        println(payingUsers.head.getClass)
         val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
         val result = new BasicDBObject
         result.put("payingUsers", (new java.util.ArrayList[String](payingUsers)))
