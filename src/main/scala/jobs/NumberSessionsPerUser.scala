@@ -3,7 +3,6 @@ package io.wazza.jobs
 import com.mongodb.BasicDBObject
 import com.mongodb.MongoClient
 import com.mongodb.MongoClientURI
-import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
@@ -17,30 +16,38 @@ import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
-import scala.util.{Success,Failure}
+import scala.collection.mutable.ArrayBuffer
+import play.api.libs.json.JsValue
+import play.api.libs.json.Json
 import scala.collection.JavaConversions._
+import scala.util.{Success,Failure}
 
-class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
+class NumberSessionsPerUser(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
 
-  override def inputCollectionType: String = "purchases"
-  override def outputCollectionType: String = "payingUsers"
+  def inputCollectionType: String = "mobileSessions"
+  def outputCollectionType: String = "numberSessionsPerUser"
 
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    payingUsers: List[String],
+    nrSessionsPerUser: List[(String,Int)],
     lowerDate: Date,
     upperDate: Date
-  ): Future[Unit] = {
+  ) = {
     val promise = Promise[Unit]
-
+    val lst = new java.util.ArrayList[BasicDBObject](nrSessionsPerUser map {el =>
+      val obj = new BasicDBObject()
+      obj.put("user",el._1.toString)
+      obj.put("nrSessions", el._2.toInt)
+      obj
+    })
     Future {
       try {
         val uri  = new MongoClientURI(uriStr)
         val client = new MongoClient(uri)
         val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
         val result = new BasicDBObject
-        result.put("payingUsers", (new java.util.ArrayList[String](payingUsers)))
+        result.put("nrSessionsPerUser", lst)
         result.put("lowerDate", lowerDate)
         result.put("upperDate", upperDate)
         collection.insert(result)
@@ -57,17 +64,18 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
     promise.future
   }
 
-   def executeJob(
-     inputCollection: String,
-     outputCollection: String,
-     lowerDate: Date,
-     upperDate: Date
-   ): Future[Unit] = {
+  private def executeJob(
+    inputCollection: String,
+    outputCollection: String,
+    lowerDate: Date,
+    upperDate: Date
+      
+  ): Future[Unit] = {
     val promise = Promise[Unit]
-    val inputUri = s"${URI}.${inputCollection}"
-    val outputUri = s"${URI}.${outputCollection}"
+    val uri = URI
+    val inputUri = s"${uri}.${inputCollection}"
+    val outputUri = s"${uri}.${outputCollection}"
     val df = new SimpleDateFormat("yyyy/MM/dd")
-
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.output.uri", outputUri)
@@ -80,39 +88,38 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
       classOf[Object],
       classOf[BSONObject]
     )/**.filter((t: Tuple2[Object, BSONObject]) => {
-       val date = t._2.get("time")
-       date match {
+       val sessionDate = t._2.get("startTime")
+       sessionDate match {
        case d: Date => {
        d.compareTo(beginDate) * endDate.compareTo(d) >= 0
        }
        case _ => {
-       println(s"error - date class is " + date.getClass)
+       println(s"error - date class is " + sessionDate.getClass)
        false
        }
        }
        })**/
 
-     if(mongoRDD.count > 0) {
-      val payingUsers = (mongoRDD.map(purchases => {
-        (purchases._2.get("userId"), 1)
-      })).groupByKey.map {userTuples =>
-        userTuples._1.toString
-      }
+    val count = mongoRDD.count()
+    if(count > 0) {
+      var b = false
+      val numberSessionsPerUser = mongoRDD.map(arg => {
+        (arg._2.get("userId").toString, 1)
+      }).reduceByKey(_ + _).collect.toList
 
       val dbResult = saveResultToDatabase(URI,
         outputCollection,
-        payingUsers.collect().toList,
+        numberSessionsPerUser,
         lowerDate,
         upperDate
       )
-
       dbResult onComplete {
         case Success(_) => promise.success()
         case Failure(ex) => promise.failure(ex)
       }
     } else {
       println("count is zero")
-      promise.failure(new Exception)
+      promise.failure(new Exception())
     }
 
     promise.future
@@ -134,5 +141,6 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
         println("SUCCESS")
       }
     }
+    case InputCollection => println("hey")
   }
 }
