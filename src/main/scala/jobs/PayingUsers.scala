@@ -19,6 +19,8 @@ import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.util.{Success,Failure}
 import scala.collection.JavaConversions._
+import java.util.ArrayList
+import scala.collection.Iterable
 
 class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
 
@@ -28,7 +30,7 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    payingUsers: List[String],
+    payingUsers: List[(String, Iterable[String])],
     lowerDate: Date,
     upperDate: Date
   ): Future[Unit] = {
@@ -39,10 +41,17 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
         val uri  = new MongoClientURI(uriStr)
         val client = new MongoClient(uri)
         val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
-        val result = new BasicDBObject
-        result.put("payingUsers", (new java.util.ArrayList[String](payingUsers)))
-        result.put("lowerDate", lowerDate)
-        result.put("upperDate", upperDate)
+        val payingUsersDB = new ArrayList[BasicDBObject](payingUsers map {(el: Tuple2[String, Iterable[String]]) =>
+          val obj = new BasicDBObject
+          obj.put("userId", el._1)
+          obj.put("purchases", new ArrayList[String](el._2.toList))
+          obj
+        })
+        val result = new BasicDBObject()
+          .append("payingUsers", payingUsersDB)
+          .append("lowerDate", lowerDate)
+          .append("upperDate", upperDate)
+
         collection.insert(result)
         client.close
         promise.success()
@@ -94,14 +103,12 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
 
      if(mongoRDD.count > 0) {
       val payingUsers = (mongoRDD.map(purchases => {
-        (purchases._2.get("userId"), 1)
-      })).groupByKey.map {userTuples =>
-        userTuples._1.toString
-      }
+        (purchases._2.get("userId").toString, purchases._2.get("id").toString)
+      })).groupByKey.collect.toList
 
       val dbResult = saveResultToDatabase(URI,
         outputCollection,
-        payingUsers.collect().toList,
+        payingUsers,
         lowerDate,
         upperDate
       )

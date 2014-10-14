@@ -18,7 +18,7 @@ import scala.concurrent._
 import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 
-class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor{
+class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
 
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "TotalRevenue"
