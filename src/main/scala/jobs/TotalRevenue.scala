@@ -17,6 +17,7 @@ import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import scala.collection.immutable.StringOps
 
 class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
 
@@ -62,18 +63,20 @@ class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with Wazza
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    )/**.filter((t: Tuple2[Object, BSONObject]) => {
-      val purchaseDate = t._2.get("time")
-      purchaseDate match {
-        case d: Date => {
-          d.compareTo(beginDate) * endDate.compareTo(d) >= 0
+    ).filter((t: Tuple2[Object, BSONObject]) => {
+      t._2.get("time") match {
+        case dbDate: BasicDBObject => {
+          val ops = new StringOps(dbDate.get("$date").toString)
+          val startDate = new SimpleDateFormat("yyyy-MM-dd").parse(ops.take(ops.indexOf('T')))
+          startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
         }
         case _ => {
-          println(s"error - date class is " + purchaseDate.getClass)
+          println(s"ERROR")
           false
         }
       }
-    })**/
+    })
+
 
     if(mongoRDD.count() > 0) {
       val totalRevenue = mongoRDD.map(arg => {

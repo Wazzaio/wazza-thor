@@ -21,6 +21,7 @@ import scala.util.{Success,Failure}
 import scala.collection.JavaConversions._
 import java.util.ArrayList
 import scala.collection.Iterable
+import scala.collection.immutable.StringOps
 
 class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
 
@@ -88,18 +89,20 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    )/**.filter((t: Tuple2[Object, BSONObject]) => {
-       val date = t._2.get("time")
-       date match {
-       case d: Date => {
-       d.compareTo(beginDate) * endDate.compareTo(d) >= 0
-       }
-       case _ => {
-       println(s"error - date class is " + date.getClass)
-       false
-       }
-       }
-       })**/
+    ).filter((t: Tuple2[Object, BSONObject]) => {
+      t._2.get("time") match {
+        case dbDate: BasicDBObject => {
+          val ops = new StringOps(dbDate.get("$date").toString)
+          val startDate = new SimpleDateFormat("yyyy-MM-dd").parse(ops.take(ops.indexOf('T')))
+          startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
+        }
+        case _ => {
+          println(s"ERROR")
+          false
+        }
+      }
+    })
+
 
      if(mongoRDD.count > 0) {
       val payingUsers = (mongoRDD.map(purchases => {
