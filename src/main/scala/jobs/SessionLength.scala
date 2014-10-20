@@ -35,8 +35,8 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
     val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
     val result = new BasicDBObject
     result.put("averageSession", avgSessionLength)
-    result.put("lowerDate", lowerDate)
-    result.put("upperDate", upperDate)
+    result.put("lowerDate", lowerDate.getTime)
+    result.put("upperDate", upperDate.getTime)
     collection.insert(result)
     client.close()
   }
@@ -48,6 +48,11 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
     upperDate: Date
     
   ): Future[Unit] = {
+
+    def parseFloat(d: String): Option[Long] = {
+      try { Some(d.toLong) } catch { case _: Throwable => None }
+    }
+
     val promise = Promise[Unit]
     val uri = URI
     val inputUri = s"${uri}.${inputCollection}"
@@ -65,10 +70,9 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
       classOf[Object],
       classOf[BSONObject]
     ).filter((t: Tuple2[Object, BSONObject]) => {
-      t._2.get("startTime") match {
-        case dbDate: BasicDBObject => {
-          val ops = new StringOps(dbDate.get("$date").toString)
-          val startDate = new SimpleDateFormat("yyyy-MM-dd").parse(ops.take(ops.indexOf('T')))
+      parseFloat(t._2.get("startTime").toString) match {
+        case Some(dbDate) => {
+          val startDate = new Date(dbDate)
           startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
         }
         case _ => {

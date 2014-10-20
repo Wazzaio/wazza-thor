@@ -39,8 +39,8 @@ class ItemRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
       val result = new BasicDBObject
       result.put("itemId", el._1)
       result.put("itemRevenue", el._2)
-      result.put("lowerDate", lowerDate)
-      result.put("upperDate", upperDate)
+      result.put("lowerDate", lowerDate.getTime)
+      result.put("upperDate", upperDate.getTime)
       collection.insert(result)
     }}
 

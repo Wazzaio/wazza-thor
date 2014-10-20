@@ -36,8 +36,8 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
     val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
     val result = new BasicDBObject
     result.put("activeUsers", payingUsers)
-    result.put("lowerDate", lowerDate)
-    result.put("upperDate", upperDate)
+    result.put("lowerDate", lowerDate.getTime)
+    result.put("upperDate", upperDate.getTime)
     collection.insert(result)
     client.close()
   }
@@ -48,6 +48,11 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
     lowerDate: Date,
     upperDate: Date
   ): Future[Unit] = {
+
+    def parseFloat(d: String): Option[Long] = {
+      try { Some(d.toLong) } catch { case _: Throwable => None }
+    }
+
     val promise = Promise[Unit]
     val inputUri = s"${URI}.${inputCollection}"
     val outputUri = s"${URI}.${outputCollection}"
@@ -56,18 +61,15 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.output.uri", outputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
-
-    val mongoDf = new SimpleDateFormat("yyyy-MM-dd")
     val mongoRDD = ctx.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
     ).filter((t: Tuple2[Object, BSONObject]) => {
-      t._2.get("startTime") match {
-        case dbDate: BasicDBObject => {
-          val ops = new StringOps(dbDate.get("$date").toString)
-          val startDate = new SimpleDateFormat("yyyy-MM-dd").parse(ops.take(ops.indexOf('T')))
+      parseFloat(t._2.get("startTime").toString) match {
+        case Some(dbDate) => {
+          val startDate = new Date(dbDate)
           startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
         }
         case _ => {
