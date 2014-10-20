@@ -50,8 +50,8 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
         })
         val result = new BasicDBObject()
           .append("payingUsers", payingUsersDB)
-          .append("lowerDate", lowerDate)
-          .append("upperDate", upperDate)
+          .append("lowerDate", lowerDate.getTime)
+          .append("upperDate", upperDate.getTime)
 
         collection.insert(result)
         client.close

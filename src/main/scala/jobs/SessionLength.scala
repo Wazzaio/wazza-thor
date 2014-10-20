@@ -35,8 +35,8 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
     val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
     val result = new BasicDBObject
     result.put("averageSession", avgSessionLength)
-    result.put("lowerDate", lowerDate)
-    result.put("upperDate", upperDate)
+    result.put("lowerDate", lowerDate.getTime)
+    result.put("upperDate", upperDate.getTime)
     collection.insert(result)
     client.close()
   }

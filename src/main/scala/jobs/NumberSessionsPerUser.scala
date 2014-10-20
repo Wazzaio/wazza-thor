@@ -49,8 +49,8 @@ class NumberSessionsPerUser(ctx: SparkContext) extends Actor with ActorLogging w
         val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
         val result = new BasicDBObject
         result.put("nrSessionsPerUser", lst)
-        result.put("lowerDate", lowerDate)
-        result.put("upperDate", upperDate)
+        result.put("lowerDate", lowerDate.getTime)
+        result.put("upperDate", upperDate.getTime)
         collection.insert(result)
         client.close
         promise.success()

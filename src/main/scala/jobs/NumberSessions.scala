@@ -35,8 +35,8 @@ class NumberSessions(ctx: SparkContext) extends Actor with ActorLogging with Waz
     val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
     val result = new BasicDBObject
     result.put("totalSessions", avgSessionLength)
-    result.put("lowerDate", lowerDate)
-    result.put("upperDate", upperDate)
+    result.put("lowerDate", lowerDate.getTime)
+    result.put("upperDate", upperDate.getTime)
     collection.insert(result)
     client.close()
   }
