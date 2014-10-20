@@ -72,6 +72,11 @@ class NumberSessionsPerUser(ctx: SparkContext) extends Actor with ActorLogging w
     upperDate: Date
       
   ): Future[Unit] = {
+
+    def parseFloat(d: String): Option[Long] = {
+      try { Some(d.toLong) } catch { case _: Throwable => None }
+    }
+
     val promise = Promise[Unit]
     val uri = URI
     val inputUri = s"${uri}.${inputCollection}"
@@ -89,10 +94,9 @@ class NumberSessionsPerUser(ctx: SparkContext) extends Actor with ActorLogging w
       classOf[Object],
       classOf[BSONObject]
     ).filter((t: Tuple2[Object, BSONObject]) => {
-      t._2.get("startTime") match {
-        case dbDate: BasicDBObject => {
-          val ops = new StringOps(dbDate.get("$date").toString)
-          val startDate = new SimpleDateFormat("yyyy-MM-dd").parse(ops.take(ops.indexOf('T')))
+      parseFloat(t._2.get("startTime").toString) match {
+        case Some(dbDate) => {
+          val startDate = new Date(dbDate)
           startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
         }
         case _ => {

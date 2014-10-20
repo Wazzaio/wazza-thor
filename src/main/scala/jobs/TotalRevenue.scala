@@ -48,6 +48,11 @@ class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with Wazza
     lowerDate: Date,
     upperDate: Date
   ): Future[Unit] = {
+
+    def parseFloat(d: String): Option[Long] = {
+      try { Some(d.toLong) } catch { case _: Throwable => None }
+    }
+
     val promise = Promise[Unit]
     val inputUri = s"${URI}.${inputCollection}"
     val outputUri = s"${URI}.${outputCollection}"
@@ -64,10 +69,9 @@ class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with Wazza
       classOf[Object],
       classOf[BSONObject]
     ).filter((t: Tuple2[Object, BSONObject]) => {
-      t._2.get("time") match {
-        case dbDate: BasicDBObject => {
-          val ops = new StringOps(dbDate.get("$date").toString)
-          val startDate = new SimpleDateFormat("yyyy-MM-dd").parse(ops.take(ops.indexOf('T')))
+      parseFloat(t._2.get("time").toString) match {
+        case Some(dbDate) => {
+          val startDate = new Date(dbDate)
           startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
         }
         case _ => {
