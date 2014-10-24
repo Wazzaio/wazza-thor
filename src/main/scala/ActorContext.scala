@@ -1,4 +1,4 @@
-package wazza.io
+package wazza.thor
 
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import java.util.Date

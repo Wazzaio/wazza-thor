@@ -1,4 +1,4 @@
-package io.wazza.jobs
+package wazza.thor.jobs
 
 import com.mongodb.BasicDBObject
 import com.mongodb.MongoClient
@@ -23,7 +23,7 @@ import java.util.ArrayList
 import scala.collection.Iterable
 import scala.collection.immutable.StringOps
 
-class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
+class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging  with WazzaActor {
 
   override def inputCollectionType: String = "purchases"
   override def outputCollectionType: String = "payingUsers"
@@ -79,8 +79,8 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
      }
 
     val promise = Promise[Unit]
-    val inputUri = s"${URI}.${inputCollection}"
-    val outputUri = s"${URI}.${outputCollection}"
+     val inputUri = s"${ThorContext.URI}.${inputCollection}"
+     val outputUri = s"${ThorContext.URI}.${outputCollection}"
     val df = new SimpleDateFormat("yyyy/MM/dd")
 
     val jobConfig = new Configuration
@@ -113,7 +113,7 @@ class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
         (purchases._2.get("userId").toString, purchases._2.get("id").toString)
       })).groupByKey.collect.toList
 
-      val dbResult = saveResultToDatabase(URI,
+       val dbResult = saveResultToDatabase(ThorContext.URI,
         outputCollection,
         payingUsers,
         lowerDate,

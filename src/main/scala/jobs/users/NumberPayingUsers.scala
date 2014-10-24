@@ -1,4 +1,4 @@
-package io.wazza.jobs
+package wazza.thor.jobs
 
 import com.mongodb.BasicDBObject
 import com.mongodb.MongoClient
@@ -19,7 +19,7 @@ import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 
-class NumberPayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
+class NumberPayingUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaActor {
 
   override def inputCollectionType: String = "purchases"
   override def outputCollectionType: String = "numberPayingUsers"
@@ -54,8 +54,8 @@ class NumberPayingUsers(ctx: SparkContext) extends Actor with ActorLogging with 
      }
 
     val promise = Promise[Unit]
-    val inputUri = s"${URI}.${inputCollection}"
-    val outputUri = s"${URI}.${outputCollection}"
+     val inputUri = s"${ThorContext.URI}.${inputCollection}"
+     val outputUri = s"${ThorContext.URI}.${outputCollection}"
     val df = new SimpleDateFormat("yyyy/MM/dd")
 
     val jobConfig = new Configuration
@@ -89,7 +89,7 @@ class NumberPayingUsers(ctx: SparkContext) extends Actor with ActorLogging with 
       })).groupByKey().count()
 
       println(s"NUMBER OF PAYING USERS $payingUsers")
-      saveResultToDatabase(URI, outputCollection, payingUsers.toInt, lowerDate, upperDate)
+      saveResultToDatabase(ThorContext.URI, outputCollection, payingUsers.toInt, lowerDate, upperDate)
       promise.success()
     } else {
       println("count is zero")

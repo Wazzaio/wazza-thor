@@ -11,7 +11,8 @@ libraryDependencies ++=  Seq(
   "com.typesafe.akka" %% "akka-actor" % "2.3.1",
   "com.typesafe.play" %% "play-json" % "2.2.1",
   "com.github.nscala-time" %% "nscala-time" % "1.2.0",
-  "org.mongodb" %% "casbah" % "2.7.3"
+  "org.mongodb" %% "casbah" % "2.7.3",
+  "com.typesafe" % "config" % "1.2.1"
 )
 
 retrieveManaged := true

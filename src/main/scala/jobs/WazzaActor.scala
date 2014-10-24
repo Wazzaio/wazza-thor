@@ -1,4 +1,4 @@
-package io.wazza.jobs
+package wazza.thor.jobs
 
 trait WazzaActor {
 
@@ -14,4 +14,5 @@ trait WazzaActor {
   trait WazzaMessage
   case class InputCollection(companyName: String, applicationName: String) extends WazzaMessage
   case class OutputCollection(companyName: String, applicationName: String) extends WazzaMessage
+  case class CoreJobCompleted(companyName: String, applicationName: String, name: String) extends WazzaMessage
 }

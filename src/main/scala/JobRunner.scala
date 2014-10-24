@@ -1,6 +1,6 @@
-package wazza.io //TODO CHANGE TO io.wazza
+package wazza.thor
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
-import io.wazza.jobs._
+import wazza.thor.jobs._
 import org.apache.spark._
 import org.joda.time.DateMidnight
 import org.joda.time.DateTime
@@ -15,8 +15,9 @@ import org.joda.time.Days
 import org.joda.time.LocalDate
 import org.joda.time.DurationFieldType
 import org.joda.time.DateTime
+import wazza.thor.messages
 
-object JobRunner extends App with WazzaContext {
+object JobRunner extends App {
 
   private var actors: List[ActorContext] = Nil
 
@@ -24,7 +25,7 @@ object JobRunner extends App with WazzaContext {
 
   private def getCompanies = {
     val CompaniesCollectionName = "companiesData"
-    val uri = new MongoClientURI(URI)
+    val uri = new MongoClientURI(ThorContext.URI)
     val client = new MongoClient(uri)
     val collection = client.getDB(uri.getDatabase()).getCollection(CompaniesCollectionName)
     collection.find.toArray.asScala.map {obj =>
@@ -46,11 +47,11 @@ object JobRunner extends App with WazzaContext {
     val sc = new SparkContext(conf)
     var buffer = new ListBuffer[ActorContext]
     buffer += new ActorContext(system.actorOf(Props(new ActiveUsers(sc)), name = "activeUsers"))
-    buffer += new ActorContext(system.actorOf(Props(new NumberPayingUsers(sc)), name = "nrPayingUsers"))
+    //buffer += new ActorContext(system.actorOf(Props(new NumberPayingUsers(sc)), name = "nrPayingUsers"))
     buffer += new ActorContext(system.actorOf(Props(new NumberSessions(sc)), name = "numberSessions"))
     buffer += new ActorContext(system.actorOf(Props(new NumberSessionsPerUser(sc)), name = "numberSessionsPerUser"))
     buffer += new ActorContext(system.actorOf(Props(new PayingUsers(sc)), name = "PayingUsers"))
-    buffer += new ActorContext(system.actorOf(Props(new SessionLength(sc)), name = "sessionLength"))
+    //buffer += new ActorContext(system.actorOf(Props(new SessionLength(sc)), name = "sessionLength"))
     buffer += new ActorContext(system.actorOf(Props(new TotalRevenue(sc)), name = "totalRevenue"))
     actors = buffer.toList
   }
@@ -59,22 +60,23 @@ object JobRunner extends App with WazzaContext {
     setup
     val lower = new DateMidnight()
     val upper = lower.plusDays(1)
-
     val e = new LocalDate().minusDays(1)
     val s = e.minusDays(7)
     val days = Days.daysBetween(s, e).getDays()+1
 
-//    new JsArray(List.range(0, days) map {i =>{
-
-
-    for {
-      c <- getCompanies
-      app <- c.apps
-      
-    } {
-      println(s"COMPANY $c -- APPLICATION $app")
-      for(actor <- actors) {
-        actor.execute(c.name, app, lower.toDate, upper.toDate)
+    List.range(0, days) foreach {index =>
+      val currentDay = s.withFieldAdded(DurationFieldType.days(), index)
+      val nextDay = currentDay.plusDays(1)
+      println(s"CURRENT DAY $currentDay")
+      for {
+        c <- getCompanies
+        app <- c.apps
+        
+      } {
+        println(s"COMPANY $c -- APPLICATION $app")
+        for(actor <- actors) {
+          actor.execute(c.name, app, currentDay.toDate, nextDay.toDate)
+        }
       }
     }
 	}

@@ -1,4 +1,4 @@
-package io.wazza.jobs
+package wazza.thor.jobs
 
 import com.mongodb.BasicDBObject
 import com.mongodb.MongoClient
@@ -18,7 +18,7 @@ import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 
-class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
+class SessionLength(ctx: SparkContext) extends Actor with ActorLogging  with WazzaActor {
 
   def inputCollectionType: String = "mobileSessions"
   def outputCollectionType: String = "SessionLength"
@@ -54,7 +54,7 @@ class SessionLength(ctx: SparkContext) extends Actor with ActorLogging with Wazz
     }
 
     val promise = Promise[Unit]
-    val uri = URI
+    val uri = ThorContext.URI
     val inputUri = s"${uri}.${inputCollection}"
     val outputUri = s"${uri}.${outputCollection}"
     val df = new SimpleDateFormat("yyyy/MM/dd")

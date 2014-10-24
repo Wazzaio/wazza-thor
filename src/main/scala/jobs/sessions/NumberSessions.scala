@@ -1,9 +1,8 @@
-package io.wazza.jobs
+package wazza.thor.jobs
 
 import com.mongodb.BasicDBObject
 import com.mongodb.MongoClient
 import com.mongodb.MongoClientURI
-import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
@@ -19,15 +18,15 @@ import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 
-class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
+class NumberSessions(ctx: SparkContext) extends Actor with ActorLogging  with WazzaActor {
 
-  override def inputCollectionType: String = "mobileSessions"
-  override def outputCollectionType: String = "activeUsers"
+  def inputCollectionType: String = "mobileSessions"
+  def outputCollectionType: String = "numberSessions"
 
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    payingUsers: Int,
+    avgSessionLength: Double,
     lowerDate: Date,
     upperDate: Date
   ) = {
@@ -35,18 +34,19 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
     val client = new MongoClient(uri)
     val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
     val result = new BasicDBObject
-    result.put("activeUsers", payingUsers)
+    result.put("totalSessions", avgSessionLength)
     result.put("lowerDate", lowerDate.getTime)
     result.put("upperDate", upperDate.getTime)
     collection.insert(result)
     client.close()
   }
 
-  def executeJob(
+  private def executeJob(
     inputCollection: String,
     outputCollection: String,
     lowerDate: Date,
     upperDate: Date
+      
   ): Future[Unit] = {
 
     def parseFloat(d: String): Option[Long] = {
@@ -54,13 +54,16 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
     }
 
     val promise = Promise[Unit]
-    val inputUri = s"${URI}.${inputCollection}"
-    val outputUri = s"${URI}.${outputCollection}"
+    val uri = ThorContext.URI
+    val inputUri = s"${uri}.${inputCollection}"
+    val outputUri = s"${uri}.${outputCollection}"
     val df = new SimpleDateFormat("yyyy/MM/dd")
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.output.uri", outputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
+
+    val mongoDf = new SimpleDateFormat("yyyy-MM-dd")
     val mongoRDD = ctx.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
@@ -81,16 +84,16 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
 
     val count = mongoRDD.count()
     if(count > 0) {
-      val payingUsers = (mongoRDD.map(arg => {
-        (arg._2.get("userId"), 1)
+      val numberSessions = (mongoRDD.map(arg => {
+        (arg._2.get("id"), 1)
       })).groupByKey().count()
 
-      println(s"NUMBER OF ACTIVE USERS $payingUsers")
-      saveResultToDatabase(URI, outputCollection, payingUsers.toInt, lowerDate, upperDate)
+      saveResultToDatabase(uri, outputCollection, numberSessions, lowerDate, upperDate)
+      println("Number of sessions " + numberSessions)
       promise.success()
     } else {
       println("count is zero")
-      promise.failure(new Exception)
+      promise.failure(new Exception())
     }
 
     promise.future
@@ -112,5 +115,6 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaC
         println("SUCCESS")
       }
     }
+    case InputCollection => println("hey")
   }
 }

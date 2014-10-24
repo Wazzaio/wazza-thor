@@ -1,4 +1,4 @@
-package io.wazza.jobs
+package wazza.thor.jobs
 
 import com.mongodb.BasicDBObject
 import com.mongodb.MongoClient
@@ -23,7 +23,7 @@ import scala.collection.JavaConversions._
 import scala.util.{Success,Failure}
 import scala.collection.immutable.StringOps
 
-class NumberSessionsPerUser(ctx: SparkContext) extends Actor with ActorLogging with WazzaContext with WazzaActor {
+class NumberSessionsPerUser(ctx: SparkContext) extends Actor with ActorLogging with WazzaActor {
 
   def inputCollectionType: String = "mobileSessions"
   def outputCollectionType: String = "numberSessionsPerUser"
@@ -78,7 +78,7 @@ class NumberSessionsPerUser(ctx: SparkContext) extends Actor with ActorLogging w
     }
 
     val promise = Promise[Unit]
-    val uri = URI
+    val uri = ThorContext.URI
     val inputUri = s"${uri}.${inputCollection}"
     val outputUri = s"${uri}.${outputCollection}"
     val df = new SimpleDateFormat("yyyy/MM/dd")
@@ -113,7 +113,7 @@ class NumberSessionsPerUser(ctx: SparkContext) extends Actor with ActorLogging w
         (arg._2.get("userId").toString, 1)
       }).reduceByKey(_ + _).collect.toList
 
-      val dbResult = saveResultToDatabase(URI,
+      val dbResult = saveResultToDatabase(ThorContext.URI,
         outputCollection,
         numberSessionsPerUser,
         lowerDate,
