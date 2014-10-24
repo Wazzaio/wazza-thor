@@ -20,11 +20,15 @@ import scala.collection.immutable.StringOps
 import wazza.thor.messages._
 
 object TotalRevenue {
-  
-  def props(ctx: SparkContext): Props = Props(new TotalRevenue(ctx)) 
+
+  def props(ctx: SparkContext, dependants: List[ActorRef]): Props = Props(new TotalRevenue(ctx, dependants))
 }
 
-class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaActor with CoreJob {
+class TotalRevenue(
+  ctx: SparkContext,
+  dependants: List[ActorRef]
+) extends Actor with ActorLogging with WazzaActor with CoreJob {
+  import context._
 
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "TotalRevenue"
@@ -131,6 +135,7 @@ class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with Wazza
       ) map {res =>
         sender ! JobCompleted("Total Revenue", new Success)
         dependants.foreach{_ ! CoreJobCompleted("Total Revenue", companyName, applicationName)}
+        stop(self)
       } recover {
         case ex: Exception => sender ! JobCompleted("Total Revenue", new Failure(ex))
       }

@@ -19,6 +19,11 @@ import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 
+object Arpu {
+
+  def props(ctx: SparkContext): Props = Props(new Arpu(ctx))
+}
+
 class Arpu(ctx: SparkContext) extends Actor with ActorLogging with WazzaActor with ChildJob {
 
   def inputCollectionType: String = "purchases"
