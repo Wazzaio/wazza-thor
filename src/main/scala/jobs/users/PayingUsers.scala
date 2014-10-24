@@ -23,6 +23,11 @@ import java.util.ArrayList
 import scala.collection.Iterable
 import scala.collection.immutable.StringOps
 
+object PayingUsers {
+  
+  def props(ctx: SparkContext): Props = Props(new PayingUsers(ctx))
+}
+
 class PayingUsers(ctx: SparkContext) extends Actor with ActorLogging  with WazzaActor {
 
   override def inputCollectionType: String = "purchases"

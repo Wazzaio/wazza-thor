@@ -15,11 +15,18 @@ import org.joda.time.Days
 import org.joda.time.LocalDate
 import org.joda.time.DurationFieldType
 import org.joda.time.DateTime
-import wazza.thor.messages
+import wazza.thor.messages._
 
 object JobRunner extends App {
 
-  private var actors: List[ActorContext] = Nil
+  val system = ActorSystem("analytics")
+  val sc = {
+    val conf = new SparkConf()
+      .setAppName("Wazza Analytics")
+      .setMaster("local")
+      .set("spark.scheduler.mode", "FAIR")
+    new SparkContext(conf)
+  }
 
   case class Company(name: String, apps: List[String])
 
@@ -37,27 +44,7 @@ object JobRunner extends App {
     }
   }
 
-  private def setup = {
-    val system = ActorSystem("analytics")
-    val conf = new SparkConf()
-      .setAppName("Wazza Analytics")
-      .setMaster("local")
-      .set("spark.scheduler.mode", "FAIR")
-      //TODO later .set("log4j.configuration", "/Users/Joao/Wazza/analytics/conf")
-    val sc = new SparkContext(conf)
-    var buffer = new ListBuffer[ActorContext]
-    buffer += new ActorContext(system.actorOf(Props(new ActiveUsers(sc)), name = "activeUsers"))
-    //buffer += new ActorContext(system.actorOf(Props(new NumberPayingUsers(sc)), name = "nrPayingUsers"))
-    buffer += new ActorContext(system.actorOf(Props(new NumberSessions(sc)), name = "numberSessions"))
-    buffer += new ActorContext(system.actorOf(Props(new NumberSessionsPerUser(sc)), name = "numberSessionsPerUser"))
-    buffer += new ActorContext(system.actorOf(Props(new PayingUsers(sc)), name = "PayingUsers"))
-    //buffer += new ActorContext(system.actorOf(Props(new SessionLength(sc)), name = "sessionLength"))
-    buffer += new ActorContext(system.actorOf(Props(new TotalRevenue(sc)), name = "totalRevenue"))
-    actors = buffer.toList
-  }
-
   override def main(args: Array[String]): Unit = {
-    setup
     val lower = new DateMidnight()
     val upper = lower.plusDays(1)
     val e = new LocalDate().minusDays(1)
@@ -74,9 +61,8 @@ object JobRunner extends App {
         
       } {
         println(s"COMPANY $c -- APPLICATION $app")
-        for(actor <- actors) {
-          actor.execute(c.name, app, currentDay.toDate, nextDay.toDate)
-        }
+        val supervisorName = s"${c.name}_supervisor_${app}"
+        system.actorOf(Supervisor.props(c.name, app, lower.toDate, upper.toDate, system, sc) , name = supervisorName)
       }
     }
 	}

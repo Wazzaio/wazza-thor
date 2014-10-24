@@ -7,7 +7,6 @@ import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
-import scala.util.Try
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
 import org.bson.BasicBSONObject
@@ -19,6 +18,11 @@ import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
+
+object TotalRevenue {
+  
+  def props(ctx: SparkContext): Props = Props(new TotalRevenue(ctx)) 
+}
 
 class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with WazzaActor with CoreJob {
 
@@ -43,7 +47,6 @@ class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with Wazza
     result.put("upperDate", upperDate.getTime)
     collection.insert(result)
     client.close()
-    dependants.foreach{_ ! CoreJobCompleted("Total Revenue", companyName, applicationName)}
   }
 
   private def executeJob(
@@ -126,8 +129,10 @@ class TotalRevenue(ctx: SparkContext) extends Actor with ActorLogging with Wazza
         companyName,
         applicationName
       ) map {res =>
-        println("SUCCESS")
         sender ! JobCompleted("Total Revenue", new Success)
+        dependants.foreach{_ ! CoreJobCompleted("Total Revenue", companyName, applicationName)}
+      } recover {
+        case ex: Exception => sender ! JobCompleted("Total Revenue", new Failure(ex))
       }
     }
   }

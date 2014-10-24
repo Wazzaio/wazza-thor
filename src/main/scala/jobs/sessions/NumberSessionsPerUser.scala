@@ -23,6 +23,11 @@ import scala.collection.JavaConversions._
 import scala.util.{Success,Failure}
 import scala.collection.immutable.StringOps
 
+object NumberSessionsPerUser {
+
+  def props(ctx: SparkContext): Props = Props(new NumberSessionsPerUser(ctx))
+}
+
 class NumberSessionsPerUser(ctx: SparkContext) extends Actor with ActorLogging with WazzaActor {
 
   def inputCollectionType: String = "mobileSessions"

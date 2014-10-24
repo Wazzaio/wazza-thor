@@ -19,6 +19,11 @@ import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 
+object ActiveUsers {
+
+  def props(ctx: SparkContext): Props = Props(new ActiveUsers(ctx))
+}
+
 class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaActor {
 
   override def inputCollectionType: String = "mobileSessions"
