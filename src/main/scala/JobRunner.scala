@@ -20,13 +20,16 @@ import wazza.thor.messages._
 object JobRunner extends App {
 
   val system = ActorSystem("analytics")
-  val sc = {
+
+  def initSpark(): SparkContext = {
     val conf = new SparkConf()
       .setAppName("Wazza Analytics")
       .setMaster("local")
       .set("spark.scheduler.mode", "FAIR")
     new SparkContext(conf)
   }
+
+  lazy val sc = initSpark
 
   case class Company(name: String, apps: List[String])
 
@@ -60,8 +63,8 @@ object JobRunner extends App {
         app <- c.apps
         
       } {
-        println(s"COMPANY $c -- APPLICATION $app")
         val supervisorName = s"${c.name}_supervisor_${app}"
+        println(s"name $supervisorName")
         system.actorOf(Supervisor.props(c.name, app, lower.toDate, upper.toDate, system, sc) , name = supervisorName)
       }
     }

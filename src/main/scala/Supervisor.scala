@@ -32,21 +32,31 @@ class Supervisor(
 ) extends Actor with ActorLogging {
   import context._
 
-  private var jobs: List[ActorContext] = Nil
-  private var results: List[JobCompleted] = Nil
+  private var jobs = List[ActorRef]()
+  private var results = List[JobCompleted]()
+
+  private def generateActor(props: Props, name: String): ActorRef = {
+    system.actorOf(props, name = name)
+  }
 
   def initJobs() = {
+    system.log.info("Creating core jobs")
     def generateName(name: String) = s"${companyName}_${name}_${appName}"
-    var buffer = new ListBuffer[ActorContext]
-    buffer += new ActorContext(system.actorOf(ActiveUsers.props(sc), name = generateName("activeUsers")))
-    buffer += new ActorContext(system.actorOf(NumberSessions.props(sc), name = generateName("numberSessions")))
-    buffer += new ActorContext(system.actorOf(NumberSessionsPerUser.props(sc), name = generateName("numberSessionsPerUser")))
-    buffer += new ActorContext(system.actorOf(PayingUsers.props(sc), name = generateName("PayingUsers")))
-    buffer += new ActorContext(system.actorOf(TotalRevenue.props(sc), name = generateName("totalRevenue")))
+    var buffer = new ListBuffer[ActorRef]
+    println(s"${companyName}_${appName}")
+    //buffer += generateActor(ActiveUsers.props(sc), generateName("activeUsers"))
+    //buffer += generateActor(NumberSessions.props(sc), generateName("numberSessions"))
+    //buffer += generateActor(NumberSessionsPerUser.props(sc), generateName("numberSessionsPerUser"))
+    //buffer += generateActor(PayingUsers.props(sc), generateName("PayingUsers"))
+    var arpu = generateActor(Arpu.props(sc), generateName("Arpu"))
+    val totalRevenue = generateActor(TotalRevenue.props(sc, List(arpu)), generateName("totalRevenue"))
+    buffer += totalRevenue
     jobs = buffer.toList
 
+    println(jobs)
+
     for(jobActor <- jobs) {
-      jobActor.execute(companyName, appName, start, end)
+      jobActor ! InitJob(companyName, appName, start, end)
     }
   }
   initJobs()

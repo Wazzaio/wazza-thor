@@ -15,7 +15,7 @@ import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import ExecutionContext.Implicits.global
-import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
 
@@ -137,7 +137,10 @@ class TotalRevenue(
         dependants.foreach{_ ! CoreJobCompleted("Total Revenue", companyName, applicationName)}
         stop(self)
       } recover {
-        case ex: Exception => sender ! JobCompleted("Total Revenue", new Failure(ex))
+        case ex: Exception => {
+          sender ! JobCompleted("Total Revenue", new Failure(ex))
+          stop(self)
+        }
       }
     }
   }
