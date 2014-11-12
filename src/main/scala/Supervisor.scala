@@ -40,10 +40,10 @@ class Supervisor(
   }
 
   def initJobs() = {
-    system.log.info("Creating core jobs")
+    log.info("Creating core jobs")
     def generateName(name: String) = s"${companyName}_${name}_${appName}"
     var buffer = new ListBuffer[ActorRef]
-    println(s"${companyName}_${appName}")
+    
     //buffer += generateActor(ActiveUsers.props(sc), generateName("activeUsers"))
     //buffer += generateActor(NumberSessions.props(sc), generateName("numberSessions"))
     //buffer += generateActor(NumberSessionsPerUser.props(sc), generateName("numberSessionsPerUser"))
@@ -52,10 +52,10 @@ class Supervisor(
     val totalRevenue = generateActor(TotalRevenue.props(sc, List(arpu)), generateName("totalRevenue"))
     buffer += totalRevenue
     jobs = buffer.toList
-
-    println(jobs)
-
+    //log.info(jobs.toString)
+    
     for(jobActor <- jobs) {
+      println(jobActor)
       jobActor ! InitJob(companyName, appName, start, end)
     }
   }
@@ -64,6 +64,7 @@ class Supervisor(
   def receive = {
     case JobCompleted(jobName, status) => {
       results = JobCompleted(jobName, status) :: results
+      println(results)
       if(jobs.size == results.size) {
         //TODO save to DB
         stop(self)

@@ -27,7 +27,7 @@ object TotalRevenue {
 class TotalRevenue(
   ctx: SparkContext,
   dependants: List[ActorRef]
-) extends Actor with ActorLogging with WazzaActor with CoreJob {
+) extends Actor with ActorLogging with WazzaActor with CoreJob with Serializable {
   import context._
 
   def inputCollectionType: String = "purchases"
@@ -75,24 +75,28 @@ class TotalRevenue(
     jobConfig.set("mongo.output.uri", outputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
+    println(jobConfig)
+    println(ctx)
+    println(inputUri)
+
     val mongoDf = new SimpleDateFormat("yyyy-MM-dd")
     val mongoRDD = ctx.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter((t: Tuple2[Object, BSONObject]) => {
+    )/**.filter(t => {
       parseFloat(t._2.get("time").toString) match {
         case Some(dbDate) => {
           val startDate = new Date(dbDate)
           startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
         }
         case _ => {
-          println(s"ERROR")
+          log.error(s"ERROR")
           false
         }
       }
-    })
+    })**/
 
 
     if(mongoRDD.count() > 0) {
@@ -112,6 +116,7 @@ class TotalRevenue(
       )
       promise.success()
     } else  {
+      log.error("Count is zero")
       promise.failure(new Exception)
     }
 
@@ -119,12 +124,10 @@ class TotalRevenue(
   }
 
   def receive = {
-    case (
-      companyName: String,
-      applicationName: String,
-      lowerDate: Date,
-      upperDate: Date
-    ) => {
+    case InitJob(companyName ,applicationName, lowerDate, upperDate) => {
+      log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
+      //sender ! JobCompleted("Total Revenue", new Success)
+      //stop(self)
       executeJob(
         getCollectionInput(companyName, applicationName),
         getCollectionOutput(companyName, applicationName),

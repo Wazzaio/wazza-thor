@@ -19,7 +19,7 @@ import wazza.thor.messages._
 
 object JobRunner extends App {
 
-  val system = ActorSystem("analytics")
+  lazy val system = ActorSystem("analytics")
 
   def initSpark(): SparkContext = {
     val conf = new SparkConf()
@@ -52,21 +52,13 @@ object JobRunner extends App {
     val upper = lower.plusDays(1)
     val e = new LocalDate().minusDays(1)
     val s = e.minusDays(7)
-    val days = Days.daysBetween(s, e).getDays()+1
-
-    List.range(0, days) foreach {index =>
-      val currentDay = s.withFieldAdded(DurationFieldType.days(), index)
-      val nextDay = currentDay.plusDays(1)
-      println(s"CURRENT DAY $currentDay")
-      for {
-        c <- getCompanies
-        app <- c.apps
-        
-      } {
-        val supervisorName = s"${c.name}_supervisor_${app}"
-        println(s"name $supervisorName")
-        system.actorOf(Supervisor.props(c.name, app, lower.toDate, upper.toDate, system, sc) , name = supervisorName)
-      }
+    for {
+      c <- List("DemoCompany")//getCompanies
+      app <- List("Demo")//c.apps
+    } {
+      println(c)
+      val supervisorName = s"${c}_supervisor_${app}".replace(' ','.') //s"${c.name}_supervisor_${app}".replace(' ','.')
+      system.actorOf(Supervisor.props(/**c.name**/c, app, lower.toDate, upper.toDate, system, sc) , name = supervisorName)
     }
 	}
 }
