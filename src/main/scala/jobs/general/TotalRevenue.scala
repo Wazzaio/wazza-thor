@@ -28,10 +28,8 @@ object TotalRevenue {
 class TotalRevenue(
   ctx: SparkContext,
   dependants: List[ActorRef]
-) extends Actor with ActorLogging with WazzaActor with CoreJob with Serializable {
+) extends Actor with ActorLogging with CoreJob  {
   import context._
-
-  private var supervisor: ActorRef = null
 
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "TotalRevenue"
@@ -119,6 +117,8 @@ class TotalRevenue(
     promise.future
   }
 
+  def kill = stop(self)
+
   def receive = {
     case InitJob(companyName ,applicationName, lowerDate, upperDate) => {
       log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
@@ -131,15 +131,11 @@ class TotalRevenue(
         companyName,
         applicationName
       ) map {res =>
-        sender ! JobCompleted("Total Revenue", new Success)
-        dependants.foreach{_ ! CoreJobCompleted("Total Revenue", companyName, applicationName)}
-        stop(self)
+        onJobSuccess(companyName, applicationName)
       } recover {
         case ex: Exception => {
-          supervisor ! JobCompleted("Total Revenue", new Failure(ex))
           log.error("Job failed")
-          dependants.foreach{_ ! PoisonPill}
-          stop(self)
+          onJobFailure(ex)
         }
       }
     }

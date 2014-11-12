@@ -16,15 +16,20 @@ import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import ExecutionContext.Implicits.global
-import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
+import wazza.thor.messages._
 
 object ActiveUsers {
 
-  def props(ctx: SparkContext): Props = Props(new ActiveUsers(ctx))
+  def props(ctx: SparkContext, dependants: List[ActorRef]): Props = Props(new ActiveUsers(ctx, dependants))
 }
 
-class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaActor {
+class ActiveUsers(
+  ctx: SparkContext,
+  dependants: List[ActorRef]
+) extends Actor with ActorLogging with CoreJob {
+  import context._
 
   override def inputCollectionType: String = "mobileSessions"
   override def outputCollectionType: String = "activeUsers"
@@ -54,10 +59,6 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaA
     upperDate: Date
   ): Future[Unit] = {
 
-    def parseFloat(d: String): Option[Long] = {
-      try { Some(d.toLong) } catch { case _: Throwable => None }
-    }
-
     val promise = Promise[Unit]
     val inputUri = s"${ThorContext.URI}.${inputCollection}"
     val outputUri = s"${ThorContext.URI}.${outputCollection}"
@@ -72,15 +73,16 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaA
       classOf[Object],
       classOf[BSONObject]
     ).filter((t: Tuple2[Object, BSONObject]) => {
+      def parseFloat(d: String): Option[Long] = {
+        try { Some(d.toLong) } catch { case _: Throwable => None }
+      }
+
       parseFloat(t._2.get("startTime").toString) match {
         case Some(dbDate) => {
           val startDate = new Date(dbDate)
           startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
         }
-        case _ => {
-          println(s"ERROR")
-          false
-        }
+        case _ => false
       }
     })
 
@@ -90,7 +92,6 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaA
         (arg._2.get("userId"), 1)
       })).groupByKey().count()
 
-      println(s"NUMBER OF ACTIVE USERS $payingUsers")
       saveResultToDatabase(ThorContext.URI, outputCollection, payingUsers.toInt, lowerDate, upperDate)
       promise.success()
     } else {
@@ -101,20 +102,24 @@ class ActiveUsers(ctx: SparkContext) extends Actor with ActorLogging with WazzaA
     promise.future
   }
 
+  def kill = stop(self)
+
   def receive = {
-    case (
-      companyName: String,
-      applicationName: String,
-      lowerDate: Date,
-      upperDate: Date
-    ) => {
+    case InitJob(companyName, applicationName, lowerDate, upperDate) => {
+      log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
+      supervisor = sender
       executeJob(
         getCollectionInput(companyName, applicationName),
         getCollectionOutput(companyName, applicationName),
         lowerDate,
         upperDate
       ) map {res =>
-        println("SUCCESS")
+        onJobSuccess(companyName, applicationName)
+      } recover {
+        case ex: Exception => {
+          log.error("Job failed")
+          onJobFailure(ex)
+        }
       }
     }
   }

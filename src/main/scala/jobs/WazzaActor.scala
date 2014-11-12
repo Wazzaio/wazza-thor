@@ -1,6 +1,10 @@
 package wazza.thor.jobs
 
+import akka.actor.{ActorRef}
+
 trait WazzaActor {
+
+  protected var supervisor: ActorRef = null
 
   def inputCollectionType: String
   def outputCollectionType: String
