@@ -18,6 +18,7 @@ import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
+import akka.actor.PoisonPill
 
 object TotalRevenue {
 
@@ -29,6 +30,8 @@ class TotalRevenue(
   dependants: List[ActorRef]
 ) extends Actor with ActorLogging with WazzaActor with CoreJob with Serializable {
   import context._
+
+  private var supervisor: ActorRef = null
 
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "TotalRevenue"
@@ -62,10 +65,6 @@ class TotalRevenue(
     applicationName: String
   ): Future[Unit] = {
 
-    def parseFloat(d: String): Option[Long] = {
-      try { Some(d.toLong) } catch { case _: Throwable => None }
-    }
-
     val promise = Promise[Unit]
     val inputUri = s"${ThorContext.URI}.${inputCollection}"
     val outputUri = s"${ThorContext.URI}.${outputCollection}"
@@ -75,29 +74,26 @@ class TotalRevenue(
     jobConfig.set("mongo.output.uri", outputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    println(jobConfig)
-    println(ctx)
-    println(inputUri)
-
     val mongoDf = new SimpleDateFormat("yyyy-MM-dd")
     val mongoRDD = ctx.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    )/**.filter(t => {
+    ).filter(t => {
+
+      def parseFloat(d: String): Option[Long] = {
+        try { Some(d.toLong) } catch { case _: Throwable => None }
+      }
+
       parseFloat(t._2.get("time").toString) match {
         case Some(dbDate) => {
           val startDate = new Date(dbDate)
           startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
         }
-        case _ => {
-          log.error(s"ERROR")
-          false
-        }
+        case _ => false
       }
-    })**/
-
+    })
 
     if(mongoRDD.count() > 0) {
       val totalRevenue = mongoRDD.map(arg => {
@@ -126,8 +122,7 @@ class TotalRevenue(
   def receive = {
     case InitJob(companyName ,applicationName, lowerDate, upperDate) => {
       log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
-      //sender ! JobCompleted("Total Revenue", new Success)
-      //stop(self)
+      supervisor = sender
       executeJob(
         getCollectionInput(companyName, applicationName),
         getCollectionOutput(companyName, applicationName),
@@ -141,7 +136,9 @@ class TotalRevenue(
         stop(self)
       } recover {
         case ex: Exception => {
-          sender ! JobCompleted("Total Revenue", new Failure(ex))
+          supervisor ! JobCompleted("Total Revenue", new Failure(ex))
+          log.error("Job failed")
+          dependants.foreach{_ ! PoisonPill}
           stop(self)
         }
       }

@@ -52,10 +52,8 @@ class Supervisor(
     val totalRevenue = generateActor(TotalRevenue.props(sc, List(arpu)), generateName("totalRevenue"))
     buffer += totalRevenue
     jobs = buffer.toList
-    //log.info(jobs.toString)
     
     for(jobActor <- jobs) {
-      println(jobActor)
       jobActor ! InitJob(companyName, appName, start, end)
     }
   }
@@ -69,6 +67,10 @@ class Supervisor(
         //TODO save to DB
         stop(self)
       }
+    }
+    case _ => {
+      log.info("DEAD LETTER")
+      stop(self)
     }
   }
 }
