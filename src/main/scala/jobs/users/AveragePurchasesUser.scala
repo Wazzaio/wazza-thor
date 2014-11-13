@@ -1,5 +1,6 @@
 package wazza.thor.jobs
 
+
 import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -17,19 +18,19 @@ import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
 import com.mongodb.casbah.Imports._
-import play.api.libs.json.Json
+import play.api.libs.json._
+import scala.collection.mutable.Map
 
-object AverageRevenuePerSession {
-  def props(sc: SparkContext): Props = Props(new AverageRevenuePerSession(sc))
+object AveragePurchasesUser {
+  def props(sc: SparkContext): Props = Props(new AveragePurchasesUser(sc))
 }
 
-class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
+class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
   import context._
 
   def inputCollectionType: String = "purchases"
-  def outputCollectionType: String = "avgRevenueSession"
+  def outputCollectionType: String = "avgPurchasesUser"
 
-  //TODO
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
@@ -43,7 +44,7 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val obj = MongoDBObject(
-      "avgRevenueSession" -> result,
+      "avgPurchasesUser" -> result,
       "lowerDate" -> start.getTime,
       "upperDate" -> end.getTime
     )
@@ -60,27 +61,31 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
     val promise = Promise[Unit]
 
     val dateFields = ("lowerDate", "upperDate")
-    val revCollName = s"${companyName}_TotalRevenue_${applicationName}"
-    val nrSessionsCollName = s"${companyName}_numberSessions_${applicationName}"
+    val payingUsersCollName = s"${companyName}_payingUsers_${applicationName}"
     val uri = MongoClientURI(ThorContext.URI)
     val mongoClient = MongoClient(uri)
-    val revCollection = mongoClient(uri.database.getOrElse("dev"))(revCollName)
-    val nrSessionsCollection = mongoClient(uri.database.getOrElse("dev"))(nrSessionsCollName)
+    val payingUsersCollection = mongoClient(uri.database.getOrElse("dev"))(payingUsersCollName)
     
     val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    val nrSessions = nrSessionsCollection.findOne(query).getOrElse(None)
-    val totalRevenue = revCollection.findOne(query).getOrElse(None)
+    val payingUsers = payingUsersCollection.findOne(query).getOrElse(None)
 
-    (nrSessions, totalRevenue) match {
-      case (None, None) => {
+    payingUsers match {
+      case None => {
         log.error("cannot find elements")
         promise.failure(new Exception)
       }
-      case (sessions, revenue) => {
-        val s = (Json.parse(sessions.toString) \ "totalSessions").as[Int]
-        val r = (Json.parse(revenue.toString) \ "totalRevenue").as[Double]
-        val result = if(s > 0) r / s else 0
+      case p => {
+        val UserKey = "user"
+        val PurchasesKey = "purchases"
+        val mapResult = (Json.parse(p.toString) \ "payingUsers").as[JsArray].value.foldLeft(Map.empty[String, Double]){(map, el) =>
+          val userPurchases = (el \ "purchases").as[JsArray].value.size
+          val storedPurchases = map getOrElse(PurchasesKey, 0.0)
+          val storedUsers = map getOrElse(UserKey, 0.0)
+          map += (UserKey -> (storedUsers + 1))
+          map += (PurchasesKey -> (storedPurchases + userPurchases))
+        }
 
+        val result = if(mapResult(UserKey) > 0) mapResult(PurchasesKey) / mapResult(UserKey) else 0
         saveResultToDatabase(
           ThorContext.URI,
           getCollectionOutput(companyName, applicationName),
@@ -95,7 +100,6 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
     }
 
     mongoClient.close
-
     promise.future
   }
 
@@ -122,4 +126,5 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
     case _ => log.debug("Received invalid message")
   }
 }
+
 
