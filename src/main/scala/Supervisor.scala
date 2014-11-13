@@ -44,14 +44,34 @@ class Supervisor(
     def generateName(name: String) = s"${companyName}_${name}_${appName}"
     var buffer = new ListBuffer[ActorRef]
     
-    var arpu = generateActor(Arpu.props(sc), generateName("Arpu"))
-    val totalRevenue = generateActor(TotalRevenue.props(sc, List(arpu)), generateName("totalRevenue"))
-    val activeUsers = generateActor(ActiveUsers.props(sc, List(arpu)), generateName("activeUsers"))
-    val payingUsers = generateActor(PayingUsers.props(sc, List()), generateName("payingUsers"))
-    val numberSessions = generateActor(NumberSessions.props(sc, List()), generateName("numberSessions"))
-    val nrSessionsPerUsers = generateActor(NumberSessionsPerUser.props(sc, List()), generateName("numberSessionsPerUser"))
+    val arpu = generateActor(Arpu.props(sc), generateName("Arpu"))
+    val avgRevenuePerSession = generateActor(
+      AverageRevenuePerSession.props(sc),
+      generateName("avgRevenueSession")
+    )
+    val totalRevenue = generateActor(
+      TotalRevenue.props(sc, List(arpu, avgRevenuePerSession)),
+      generateName("totalRevenue")
+    )
+    val activeUsers = generateActor(
+      ActiveUsers.props(sc, List(arpu)),
+      generateName("activeUsers")
+    )
+    val payingUsers = generateActor(
+      PayingUsers.props(sc, List()),
+      generateName("payingUsers")
+    )
+    val numberSessions = generateActor(
+      NumberSessions.props(sc, List(avgRevenuePerSession)),
+      generateName("numberSessions")
+    )
+    val nrSessionsPerUsers = generateActor(
+      NumberSessionsPerUser.props(sc, List()),
+      generateName("nrSessionsPerUser")
+    )
 
     arpu ! CoreJobDependency(List(totalRevenue, activeUsers))
+    avgRevenuePerSession ! CoreJobDependency(List(totalRevenue, numberSessions))
 
     buffer += totalRevenue
     buffer += activeUsers
