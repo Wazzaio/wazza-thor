@@ -8,14 +8,16 @@ import java.util.Date
 trait CoreJob extends WazzaActor {
   self: Actor =>
 
+  protected var jobCompleted = false
+
   var dependants: List[ActorRef] = Nil
+  protected var childJobsCompleted = List[String]()
   def addDependant(d: ActorRef) = dependants = dependants :+ d
   def kill: Unit
 
   def onJobSuccess(companyName: String, applicationName: String, jobType: String, lower: Date, upper: Date) = {
-    supervisor ! JobCompleted(jobType, new Success)
     dependants.foreach{_ ! CoreJobCompleted(companyName, applicationName, jobType, lower, upper)}
-    kill
+    jobCompleted = true
   }
 
   def onJobFailure(ex: Exception, jobType: String) = {

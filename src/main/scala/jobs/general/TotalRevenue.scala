@@ -140,5 +140,14 @@ class TotalRevenue(
         }
       }
     }
+    /** Must wait for all childs to finish **/
+    case JobCompleted(jobType, status) => {
+      childJobsCompleted = childJobsCompleted :+ jobType
+      if(childJobsCompleted.size == dependants.size) {
+        log.info("All child jobs have finished")
+        supervisor ! JobCompleted(jobType, new Success)
+        kill
+      }
+    }
   }
 }
