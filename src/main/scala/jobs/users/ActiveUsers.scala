@@ -27,9 +27,11 @@ object ActiveUsers {
 
 class ActiveUsers(
   ctx: SparkContext,
-  dependants: List[ActorRef]
+  d: List[ActorRef]
 ) extends Actor with ActorLogging with CoreJob {
   import context._
+
+  dependants = d
 
   override def inputCollectionType: String = "mobileSessions"
   override def outputCollectionType: String = "activeUsers"
@@ -72,7 +74,7 @@ class ActiveUsers(
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter((t: Tuple2[Object, BSONObject]) => {
+    )/**.filter((t: Tuple2[Object, BSONObject]) => {
       def parseFloat(d: String): Option[Long] = {
         try { Some(d.toLong) } catch { case _: Throwable => None }
       }
@@ -84,7 +86,7 @@ class ActiveUsers(
         }
         case _ => false
       }
-    })
+    })**/
 
     val count = mongoRDD.count()
     if(count > 0) {
@@ -95,7 +97,7 @@ class ActiveUsers(
       saveResultToDatabase(ThorContext.URI, outputCollection, payingUsers.toInt, lowerDate, upperDate)
       promise.success()
     } else {
-      println("count is zero")
+      log.error("count is zero")
       promise.failure(new Exception)
     }
 
@@ -114,11 +116,12 @@ class ActiveUsers(
         lowerDate,
         upperDate
       ) map {res =>
-        onJobSuccess(companyName, applicationName)
+        log.info("Job completed successful")
+        onJobSuccess(companyName, applicationName, "Active Users", lowerDate, upperDate)
       } recover {
         case ex: Exception => {
           log.error("Job failed")
-          onJobFailure(ex)
+          onJobFailure(ex, "Active Users")
         }
       }
     }

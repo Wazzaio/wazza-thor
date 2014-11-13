@@ -50,7 +50,12 @@ class Supervisor(
     //buffer += generateActor(PayingUsers.props(sc), generateName("PayingUsers"))
     var arpu = generateActor(Arpu.props(sc), generateName("Arpu"))
     val totalRevenue = generateActor(TotalRevenue.props(sc, List(arpu)), generateName("totalRevenue"))
+    val activeUsers = generateActor(ActiveUsers.props(sc, List(arpu)), generateName("activeUsers"))
+
+    arpu ! CoreJobDependency(List(totalRevenue, activeUsers))
+
     buffer += totalRevenue
+    buffer += activeUsers
     jobs = buffer.toList
     
     for(jobActor <- jobs) {
@@ -65,6 +70,7 @@ class Supervisor(
       println(results)
       if(jobs.size == results.size) {
         //TODO save to DB
+        log.info("All jobs have finished")
         stop(self)
       }
     }

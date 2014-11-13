@@ -15,6 +15,10 @@ libraryDependencies ++=  Seq(
   "com.typesafe" % "config" % "1.2.1"
 )
 
+fork := true
+
+javaOptions in run += "-Xms1024M"
+
 retrieveManaged := true
 
 resolvers += "Akka Repository" at "http://repo.akka.io/releases/"

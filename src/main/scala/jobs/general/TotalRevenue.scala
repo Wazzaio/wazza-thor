@@ -10,7 +10,6 @@ import org.apache.spark._
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
 import org.bson.BasicBSONObject
-import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
@@ -27,9 +26,11 @@ object TotalRevenue {
 
 class TotalRevenue(
   ctx: SparkContext,
-  dependants: List[ActorRef]
+  d: List[ActorRef]
 ) extends Actor with ActorLogging with CoreJob  {
   import context._
+
+  dependants = d
 
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "TotalRevenue"
@@ -72,13 +73,12 @@ class TotalRevenue(
     jobConfig.set("mongo.output.uri", outputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val mongoDf = new SimpleDateFormat("yyyy-MM-dd")
     val mongoRDD = ctx.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter(t => {
+    )/**.filter(t => {
 
       def parseFloat(d: String): Option[Long] = {
         try { Some(d.toLong) } catch { case _: Throwable => None }
@@ -91,7 +91,7 @@ class TotalRevenue(
         }
         case _ => false
       }
-    })
+    })**/
 
     if(mongoRDD.count() > 0) {
       val totalRevenue = mongoRDD.map(arg => {
@@ -131,11 +131,12 @@ class TotalRevenue(
         companyName,
         applicationName
       ) map {res =>
-        onJobSuccess(companyName, applicationName)
+        log.info("Job completed successful")
+        onJobSuccess(companyName, applicationName, "Total Revenue", lowerDate, upperDate)
       } recover {
         case ex: Exception => {
           log.error("Job failed")
-          onJobFailure(ex)
+          onJobFailure(ex, "Total Revenue")
         }
       }
     }

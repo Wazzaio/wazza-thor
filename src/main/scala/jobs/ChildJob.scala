@@ -1,17 +1,32 @@
 package wazza.thor.jobs
 
-trait ChildJob {
+import akka.actor.{ActorRef, Actor, ActorLogging}
+import wazza.thor.messages._
+import akka.actor.PoisonPill
 
-  var dependencies: List[String] = Nil
-  var completedDependencies: List[String] = Nil
+trait ChildJob extends WazzaActor {
+  self: Actor =>
 
-  def addDependency(d: String) = dependencies = dependencies :+ d
-  def dependenciesCompleted = dependencies == completedDependencies
-  def execute()
+  var dependencies: List[ActorRef] = Nil
+  var completedDependencies: List[ActorRef] = Nil
 
-  /**
-    TODO
-    - update dependencies and completedDepedencies
-    - check if all dependencies are done
-  **/
+  def addDependencies(dependencies: List[ActorRef]) = dependencies.foreach{addDependency(_)}
+  def addDependency(d: ActorRef) = dependencies = dependencies :+ d
+  
+  def updateCompletedDependencies(d: ActorRef) = completedDependencies = completedDependencies :+ d
+  def dependenciesCompleted = {
+    dependencies.foldLeft(dependencies.size == completedDependencies.size)(_ && completedDependencies.contains(_))
+  }
+  def kill: Unit
+  
+  def onJobSuccess[T <: Any](companyName: String, applicationName: String, jobType: String, result: T) {
+    dependencies.foreach{_ ! ChildJobCompleted(result, new Success)}
+    kill
+  }
+
+  def onJobFailure(ex: Exception, jobType: String) = {
+    dependencies.foreach{_ ! ChildJobCompleted[String](jobType, new Failure(ex))}
+    kill
+  }
 }
+

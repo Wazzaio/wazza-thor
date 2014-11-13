@@ -1,6 +1,16 @@
 package wazza.thor.messages
 
+import java.util.Date
+
 trait JobResult
 case class Success extends JobResult
 case class Failure(ex: Exception) extends JobResult
 case class JobCompleted(jobName: String, status: JobResult)
+case class CoreJobCompleted(
+  companyName: String,
+  applicationName: String,
+  name: String,
+  lower: Date,
+  upper: Date
+) extends JobResult
+case class ChildJobCompleted[T](result: T, status: JobResult)

@@ -3,23 +3,23 @@ package wazza.thor.jobs
 import akka.actor.{ActorRef, Actor, ActorLogging}
 import wazza.thor.messages._
 import akka.actor.PoisonPill
+import java.util.Date
 
 trait CoreJob extends WazzaActor {
- 
-  var dependants: List[ActorRef] = Nil
-  
-  def addDependant(d: ActorRef) = dependants = dependants :+ d
+  self: Actor =>
 
+  var dependants: List[ActorRef] = Nil
+  def addDependant(d: ActorRef) = dependants = dependants :+ d
   def kill: Unit
 
-  def onJobSuccess(companyName: String, applicationName: String) = {
-    supervisor ! JobCompleted("Total Revenue", new Success)
-    dependants.foreach{_ ! CoreJobCompleted("Total Revenue", companyName, applicationName)}
+  def onJobSuccess(companyName: String, applicationName: String, jobType: String, lower: Date, upper: Date) = {
+    supervisor ! JobCompleted(jobType, new Success)
+    dependants.foreach{_ ! CoreJobCompleted(companyName, applicationName, jobType, lower, upper)}
     kill
   }
 
-  def onJobFailure(ex: Exception) = {
-    supervisor ! JobCompleted("Total Revenue", new Failure(ex))
+  def onJobFailure(ex: Exception, jobType: String) = {
+    supervisor ! JobCompleted(jobType, new Failure(ex))
     dependants.foreach{_ ! PoisonPill}
     kill
   }
