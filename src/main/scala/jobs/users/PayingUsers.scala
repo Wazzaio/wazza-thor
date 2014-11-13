@@ -43,7 +43,7 @@ class PayingUsers(
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    payingUsers: List[(String, Iterable[String])],
+    payingUsers: List[(String, Iterable[(String, Float)])],
     lowerDate: Date,
     upperDate: Date
   ): Future[Unit] = {
@@ -54,10 +54,16 @@ class PayingUsers(
       val client = new MongoClient(uri)
       try {
         val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
-        val payingUsersDB = new ArrayList[BasicDBObject](payingUsers map {(el: Tuple2[String, Iterable[String]]) =>
+        val payingUsersDB = new ArrayList[BasicDBObject](payingUsers map {(el: Tuple2[String, Iterable[Tuple2[String, Float]]]) =>
           val obj = new BasicDBObject
           obj.put("userId", el._1)
-          obj.put("purchases", new ArrayList[String](el._2.toList))
+          obj.put("purchases", new ArrayList[BasicDBObject](el._2.toList map {(p: Tuple2[String, Float]) =>
+            val pObject = new BasicDBObject
+            pObject.put("purchaseID", p._1)
+            pObject.put("purchaseTime", p._2)
+            pObject
+          }))
+
           obj
         })
         val result = new BasicDBObject()
@@ -70,6 +76,7 @@ class PayingUsers(
         promise.success()
       } catch {
         case ex: Exception => {
+          log.error(ex.getMessage)
           client.close
           promise.failure(ex)
         }
@@ -115,8 +122,13 @@ class PayingUsers(
 
      if(mongoRDD.count > 0) {
       val payingUsers = (mongoRDD.map(purchases => {
-        (purchases._2.get("userId").toString, purchases._2.get("id").toString)
+        (
+          purchases._2.get("userId").toString,
+          (purchases._2.get("id").toString, purchases._2.get("time").toString.toFloat)
+        )
       })).groupByKey.collect.toList
+
+       log.info(payingUsers.toString)
 
        val dbResult = saveResultToDatabase(ThorContext.URI,
         outputCollection,

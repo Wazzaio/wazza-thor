@@ -1,14 +1,11 @@
 package wazza.thor.jobs
 
-//purchases per session
-
-
 import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
 import scala.util.Try
-  import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
 import org.bson.BasicBSONObject
 import org.apache.spark.SparkContext
