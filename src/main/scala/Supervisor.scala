@@ -44,13 +44,12 @@ class Supervisor(
     def generateName(name: String) = s"${companyName}_${name}_${appName}"
     var buffer = new ListBuffer[ActorRef]
     
-    //buffer += generateActor(NumberSessions.props(sc), generateName("numberSessions"))
-    //buffer += generateActor(NumberSessionsPerUser.props(sc), generateName("numberSessionsPerUser"))
     var arpu = generateActor(Arpu.props(sc), generateName("Arpu"))
     val totalRevenue = generateActor(TotalRevenue.props(sc, List(arpu)), generateName("totalRevenue"))
     val activeUsers = generateActor(ActiveUsers.props(sc, List(arpu)), generateName("activeUsers"))
     val payingUsers = generateActor(PayingUsers.props(sc, List()), generateName("payingUsers"))
     val numberSessions = generateActor(NumberSessions.props(sc, List()), generateName("numberSessions"))
+    val nrSessionsPerUsers = generateActor(NumberSessionsPerUser.props(sc, List()), generateName("numberSessionsPerUser"))
 
     arpu ! CoreJobDependency(List(totalRevenue, activeUsers))
 
@@ -58,6 +57,7 @@ class Supervisor(
     buffer += activeUsers
     buffer += payingUsers
     buffer += numberSessions
+    buffer += nrSessionsPerUsers
     jobs = buffer.toList
     
     for(jobActor <- jobs) {
