@@ -19,13 +19,13 @@ trait ChildJob extends WazzaActor {
   }
   def kill: Unit
   
-  def onJobSuccess[T <: Any](companyName: String, applicationName: String, jobType: String, result: T) {
-    dependencies.foreach{_ ! ChildJobCompleted(result, new Success)}
+  def onJobSuccess(companyName: String, applicationName: String, jobType: String) {
+    dependencies.foreach{_ ! JobCompleted(jobType, new Success)}
     kill
   }
 
   def onJobFailure(ex: Exception, jobType: String) = {
-    dependencies.foreach{_ ! ChildJobCompleted[String](jobType, new Failure(ex))}
+    dependencies.foreach{_ ! JobCompleted(jobType, new Failure(ex))}
     kill
   }
 }

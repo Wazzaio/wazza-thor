@@ -13,4 +13,3 @@ case class CoreJobCompleted(
   lower: Date,
   upper: Date
 ) extends JobResult
-case class ChildJobCompleted[T](result: T, status: JobResult)

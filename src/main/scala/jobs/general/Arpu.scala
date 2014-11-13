@@ -29,20 +29,42 @@ class Arpu(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "Arpu"
 
+  private def saveResultToDatabase(
+    uriStr: String,
+    collectionName: String,
+    arpu: Double,
+    lowerDate: Date,
+    upperDate: Date,
+    companyName: String,
+    applicationName: String
+  ) = {
+    val uri  = MongoClientURI(uriStr)
+    val client = MongoClient(uri)
+    val collection = client.getDB(uri.database.get)(collectionName)
+    val obj = MongoDBObject(
+      "arpu" -> arpu,
+      "lowerDate" -> lowerDate.getTime,
+      "upperDate" -> upperDate.getTime
+    )
+    collection.insert(obj)
+    client.close
+  }
+
   def executeJob(
     companyName: String,
     applicationName: String,
     start: Date,
     end: Date
-  ): Future[Double] = {
-    val promise = Promise[Double]
+  ): Future[Unit] = {
+    val promise = Promise[Unit]
 
     val dateFields = ("lowerDate", "upperDate")
     val revCollName = s"${companyName}_TotalRevenue_${applicationName}"
     val activeCollName = s"${companyName}_activeUsers_${applicationName}"
-    val mongoClient = MongoClient(MongoClientURI(ThorContext.URI))
-    val revCollection = mongoClient("dev")(revCollName)
-    val activeCollection = mongoClient("dev")(activeCollName)
+    val uri = MongoClientURI(ThorContext.URI)
+    val mongoClient = MongoClient(uri)
+    val revCollection = mongoClient(uri.database.getOrElse("dev"))(revCollName)
+    val activeCollection = mongoClient(uri.database.getOrElse("dev"))(activeCollName)
     
     val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
     val activeUsers = activeCollection.findOne(query).getOrElse(None)
@@ -56,9 +78,18 @@ class Arpu(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
       case (active, revenue) => {
         val a = (Json.parse(active.toString) \ "activeUsers").as[Int]
         val r = (Json.parse(revenue.toString) \ "totalRevenue").as[Double]
-        log.info(a.toString)
-        log.info(r.toString)
-        promise.success(if(a > 0) r / a else 0)
+        val arpu = if(a > 0) r / a else 0
+        
+        saveResultToDatabase(
+          ThorContext.URI,
+          getCollectionOutput(companyName, applicationName),
+          arpu,
+          start,
+          end,
+          companyName,
+          applicationName
+        )
+        promise.success()
       }
     }
 
@@ -74,7 +105,8 @@ class Arpu(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
       if(dependenciesCompleted) {
         log.info("execute job")
         executeJob(companyName, applicationName, upper, lower) map { arpu =>
-          onJobSuccess[Double](companyName, applicationName, "Arpu", arpu)
+          log.info("Job completed successful")
+          onJobSuccess(companyName, applicationName, "Arpu")
         } recover {
           case ex: Exception => onJobFailure(ex, "Arpu")
         }
