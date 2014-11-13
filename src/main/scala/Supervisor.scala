@@ -45,10 +45,17 @@ class Supervisor(
     var buffer = new ListBuffer[ActorRef]
     
     val arpu = generateActor(Arpu.props(sc), generateName("Arpu"))
+
     val avgRevenuePerSession = generateActor(
       AverageRevenuePerSession.props(sc),
       generateName("avgRevenueSession")
     )
+
+    val avgPurchasesSession = generateActor(
+      PurchasesPerSession.props(sc),
+      generateName("avgPurchasesSession")
+    )
+
     val totalRevenue = generateActor(
       TotalRevenue.props(sc, List(arpu, avgRevenuePerSession)),
       generateName("totalRevenue")
@@ -58,11 +65,11 @@ class Supervisor(
       generateName("activeUsers")
     )
     val payingUsers = generateActor(
-      PayingUsers.props(sc, List()),
+      PayingUsers.props(sc, List(avgPurchasesSession)),
       generateName("payingUsers")
     )
     val numberSessions = generateActor(
-      NumberSessions.props(sc, List(avgRevenuePerSession)),
+      NumberSessions.props(sc, List(avgRevenuePerSession, avgPurchasesSession)),
       generateName("numberSessions")
     )
     val nrSessionsPerUsers = generateActor(
@@ -72,6 +79,7 @@ class Supervisor(
 
     arpu ! CoreJobDependency(List(totalRevenue, activeUsers))
     avgRevenuePerSession ! CoreJobDependency(List(totalRevenue, numberSessions))
+    avgPurchasesSession ! CoreJobDependency(List(payingUsers, numberSessions))
 
     buffer += totalRevenue
     buffer += activeUsers
