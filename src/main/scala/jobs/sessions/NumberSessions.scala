@@ -3,7 +3,6 @@ package wazza.thor.jobs
 import com.mongodb.BasicDBObject
 import com.mongodb.MongoClient
 import com.mongodb.MongoClientURI
-import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
 import scala.util.Try
@@ -15,15 +14,22 @@ import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import ExecutionContext.Implicits.global
-import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, Props, ActorRef}
 import scala.collection.immutable.StringOps
+import wazza.thor.messages._
 
 object NumberSessions {
 
-  def props(ctx: SparkContext): Props = Props(new NumberSessions(ctx))
+  def props(ctx: SparkContext, d: List[ActorRef]): Props = Props(new NumberSessions(ctx, d))
 }
 
-class NumberSessions(ctx: SparkContext) extends Actor with ActorLogging  with WazzaActor {
+class NumberSessions(
+  ctx: SparkContext,
+  d: List[ActorRef]
+) extends Actor with ActorLogging  with CoreJob {
+  import context._
+
+  dependants = d
 
   def inputCollectionType: String = "mobileSessions"
   def outputCollectionType: String = "numberSessions"
@@ -54,38 +60,33 @@ class NumberSessions(ctx: SparkContext) extends Actor with ActorLogging  with Wa
       
   ): Future[Unit] = {
 
-    def parseFloat(d: String): Option[Long] = {
-      try { Some(d.toLong) } catch { case _: Throwable => None }
-    }
-
     val promise = Promise[Unit]
     val uri = ThorContext.URI
     val inputUri = s"${uri}.${inputCollection}"
     val outputUri = s"${uri}.${outputCollection}"
-    val df = new SimpleDateFormat("yyyy/MM/dd")
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.output.uri", outputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val mongoDf = new SimpleDateFormat("yyyy-MM-dd")
     val mongoRDD = ctx.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter((t: Tuple2[Object, BSONObject]) => {
+    )/**.filter((t: Tuple2[Object, BSONObject]) => {
+      def parseFloat(d: String): Option[Long] = {
+        try { Some(d.toLong) } catch { case _: Throwable => None }
+      }
+
       parseFloat(t._2.get("startTime").toString) match {
         case Some(dbDate) => {
           val startDate = new Date(dbDate)
           startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
         }
-        case _ => {
-          println(s"ERROR")
-          false
-        }
+        case _ => false
       }
-    })
+    })**/
 
     val count = mongoRDD.count()
     if(count > 0) {
@@ -94,32 +95,45 @@ class NumberSessions(ctx: SparkContext) extends Actor with ActorLogging  with Wa
       })).groupByKey().count()
 
       saveResultToDatabase(uri, outputCollection, numberSessions, lowerDate, upperDate)
-      println("Number of sessions " + numberSessions)
       promise.success()
     } else {
-      println("count is zero")
+      log.error("count is zero")
       promise.failure(new Exception())
     }
 
     promise.future
   }
 
+  def kill = stop(self)
+
   def receive = {
-    case (
-      companyName: String,
-      applicationName: String,
-      lowerDate: Date,
-      upperDate: Date
-    ) => {
+    case InitJob(companyName, applicationName, lowerDate, upperDate) => {
+      log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
+      supervisor = sender
       executeJob(
         getCollectionInput(companyName, applicationName),
         getCollectionOutput(companyName, applicationName),
         lowerDate,
         upperDate
       ) map {res =>
-        println("SUCCESS")
+        log.info("Job completed successful")
+        onJobSuccess(companyName, applicationName, "Number Sessions", lowerDate, upperDate)
+      } recover {
+        case ex: Exception => {
+          log.error("Job failed")
+          onJobFailure(ex, "Number Sessions")
+        }
       }
     }
-    case InputCollection => println("hey")
+    /** Must wait for all childs to finish **/
+    case JobCompleted(jobType, status) => {
+      childJobsCompleted = childJobsCompleted :+ jobType
+      if(childJobsCompleted.size == dependants.size) {
+        log.info("All child jobs have finished")
+        supervisor ! JobCompleted(jobType, new wazza.thor.messages.Success)
+        kill
+      }
+    }
   }
 }
+

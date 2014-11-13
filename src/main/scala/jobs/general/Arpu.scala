@@ -33,8 +33,8 @@ class Arpu(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
     uriStr: String,
     collectionName: String,
     arpu: Double,
-    lowerDate: Date,
-    upperDate: Date,
+    end: Date,
+    start: Date,
     companyName: String,
     applicationName: String
   ) = {
@@ -43,8 +43,8 @@ class Arpu(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
     val collection = client.getDB(uri.database.get)(collectionName)
     val obj = MongoDBObject(
       "arpu" -> arpu,
-      "lowerDate" -> lowerDate.getTime,
-      "upperDate" -> upperDate.getTime
+      "lowerDate" -> start.getTime,
+      "upperDate" -> end.getTime
     )
     collection.insert(obj)
     client.close
@@ -92,6 +92,8 @@ class Arpu(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
         promise.success()
       }
     }
+
+    mongoClient.close
 
     promise.future
   }
