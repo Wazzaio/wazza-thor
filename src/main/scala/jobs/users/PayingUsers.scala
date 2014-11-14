@@ -126,14 +126,16 @@ class PayingUsers(
           purchases._2.get("userId").toString,
           (purchases._2.get("id").toString, purchases._2.get("time").toString.toFloat)
         )
-      })).groupByKey.collect.toList
+      })).groupByKey.map(purchaseInfo => {
+        (purchaseInfo._1, purchaseInfo._2.toList.sortWith(_._2 < _._2))
+      }).collect.toList
 
        val dbResult = saveResultToDatabase(ThorContext.URI,
-        outputCollection,
-        payingUsers,
-        lowerDate,
-        upperDate
-      )
+         outputCollection,
+         payingUsers,
+         lowerDate,
+         upperDate
+       )
 
       dbResult onComplete {
         case Success(_) => promise.success()
