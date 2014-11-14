@@ -128,8 +128,6 @@ class PayingUsers(
         )
       })).groupByKey.collect.toList
 
-       log.info(payingUsers.toString)
-
        val dbResult = saveResultToDatabase(ThorContext.URI,
         outputCollection,
         payingUsers,
