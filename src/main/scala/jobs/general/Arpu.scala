@@ -13,17 +13,17 @@ import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import ExecutionContext.Implicits.global
-import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
 import com.mongodb.casbah.Imports._
 import play.api.libs.json.Json
 
 object Arpu {
-  def props(sc: SparkContext): Props = Props(new Arpu(sc))
+  def props(sc: SparkContext, ltvJob: ActorRef): Props = Props(new Arpu(sc, ltvJob))
 }
 
-class Arpu(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
+class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  with ChildJob {
   import context._
 
   def inputCollectionType: String = "purchases"
@@ -108,6 +108,7 @@ class Arpu(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
         log.info("execute job")
         executeJob(companyName, applicationName, upper, lower) map { arpu =>
           log.info("Job completed successful")
+          ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper)
           onJobSuccess(companyName, applicationName, "Arpu")
         } recover {
           case ex: Exception => onJobFailure(ex, "Arpu")
