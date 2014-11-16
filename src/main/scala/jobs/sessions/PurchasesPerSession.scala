@@ -29,7 +29,6 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "PurchasesPerSession"
 
-  //TODO
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
@@ -78,15 +77,11 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       }
       case (sessions, users) => {
         val nrSessions = (Json.parse(sessions.toString) \ "totalSessions").as[Int]
-        log.info("nr sessions " + nrSessions)
-        val nrPurchases = (Json.parse(users.toString) \ "payingUsers").as[JsArray].value.foldLeft(0)((sum, obj) => {
+        val nrPurchases = (Json.parse(users.toString) \ "payingUsers").as[JsArray].value.foldLeft(0.0)((sum, obj) => {
           sum + (obj \ "purchases").as[JsArray].value.size
         })
 
-        log.info("number of purchases " + nrPurchases)
-
         val result = if(nrSessions > 0) nrPurchases / nrSessions else 0
-
         saveResultToDatabase(
           ThorContext.URI,
           getCollectionOutput(companyName, applicationName),

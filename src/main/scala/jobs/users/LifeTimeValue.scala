@@ -1,13 +1,11 @@
 package wazza.thor.jobs
 
-//LTV
-
 import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
 import scala.util.Try
-  import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
 import org.bson.BasicBSONObject
 import org.apache.spark.SparkContext
@@ -22,7 +20,7 @@ import com.mongodb.casbah.Imports._
 import play.api.libs.json._
 import org.joda.time.LocalDate
 
-//TODO
+//TODO missing user retention rate
 object LifeTimeValue {
   def props(sc: SparkContext): Props = Props(new LifeTimeValue(sc))
 }
