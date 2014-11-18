@@ -1,8 +1,5 @@
 package wazza.thor.jobs
 
-import com.mongodb.BasicDBObject
-import com.mongodb.MongoClient
-import com.mongodb.MongoClientURI
 import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -23,11 +20,16 @@ import java.util.ArrayList
 import scala.collection.Iterable
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
+import com.mongodb.casbah.Imports._
+import play.api.libs.json._
 
 object PayingUsers {
   
   def props(ctx: SparkContext, d: List[ActorRef]): Props = Props(new PayingUsers(ctx, d))
 }
+
+sealed case class PurchaseInfo(purchaseId: String, time: Float)
+sealed case class UserPurchases(userId: String, purchases: List[PurchaseInfo], lowerDate: Float, upperDate: Float)
 
 class PayingUsers(
   ctx: SparkContext,
@@ -40,38 +42,39 @@ class PayingUsers(
   override def inputCollectionType: String = "purchases"
   override def outputCollectionType: String = "payingUsers"
 
+  implicit def userPurchaseToBson(u: UserPurchases): DBObject = {
+    MongoDBObject(
+      "userId" -> u.userId,
+      "purchases" -> (u.purchases map {purchaseInfoToBson(_)}),
+      "lowerDate" -> u.lowerDate,
+      "upperDate" -> u.upperDate
+    )
+  }
+
+  implicit def purchaseInfoToBson(p: PurchaseInfo): MongoDBObject = {
+    MongoDBObject(
+      "purchaseId" -> p.purchaseId,
+      "time" -> p.time
+    )
+  }
+
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    payingUsers: List[(String, Iterable[(String, Float)])],
+    payingUsers: List[(String, List[PurchaseInfo])],
     lowerDate: Date,
     upperDate: Date
   ): Future[Unit] = {
     val promise = Promise[Unit]
-
     Future {
-      val uri  = new MongoClientURI(uriStr)
-      val client = new MongoClient(uri)
+      val uri  = MongoClientURI(uriStr)
+      val client = MongoClient(uri)
       try {
-        val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
-        val payingUsersDB = new ArrayList[BasicDBObject](payingUsers map {(el: Tuple2[String, Iterable[Tuple2[String, Float]]]) =>
-          val obj = new BasicDBObject
-          obj.put("userId", el._1)
-          obj.put("purchases", new ArrayList[BasicDBObject](el._2.toList map {(p: Tuple2[String, Float]) =>
-            val pObject = new BasicDBObject
-            pObject.put("purchaseID", p._1)
-            pObject.put("purchaseTime", p._2)
-            pObject
-          }))
-
-          obj
-        })
-        val result = new BasicDBObject()
-          .append("payingUsers", payingUsersDB)
-          .append("lowerDate", lowerDate.getTime)
-          .append("upperDate", upperDate.getTime)
-
-        collection.insert(result)
+        val collection = client.getDB(uri.database.get)(collectionName)
+        payingUsers foreach {element =>
+          val pInfo = UserPurchases(element._1, element._2, lowerDate.getTime, upperDate.getTime)
+          collection.insert(pInfo)
+        }
         client.close
         promise.success()
       } catch {
@@ -82,7 +85,6 @@ class PayingUsers(
         }
       }
     }
-
     promise.future
   }
 
@@ -124,10 +126,10 @@ class PayingUsers(
       val payingUsers = (mongoRDD.map(purchases => {
         (
           purchases._2.get("userId").toString,
-          (purchases._2.get("id").toString, purchases._2.get("time").toString.toFloat)
+          PurchaseInfo(purchases._2.get("id").toString, purchases._2.get("time").toString.toFloat)
         )
       })).groupByKey.map(purchaseInfo => {
-        (purchaseInfo._1, purchaseInfo._2.toList.sortWith(_._2 < _._2))
+        (purchaseInfo._1, purchaseInfo._2.toList.sortWith(_.time < _.time))
       }).collect.toList
 
        val dbResult = saveResultToDatabase(ThorContext.URI,

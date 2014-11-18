@@ -69,6 +69,11 @@ class Supervisor(
       generateName("avgPurchasesUser")
     )
 
+    /**val avgTimeFirstPurchase = generateActor(
+      AvgTimeFirstPurchase.props(sc),
+      generateName("avgTimeFirstPurchases")
+    )**/
+
     val avgTimeBetweenPurchases = generateActor(
       AvgTimeBetweenPurchases.props(sc),
       generateName("avgTimeBetweenPurchases")
@@ -83,7 +88,7 @@ class Supervisor(
       generateName("activeUsers")
     )
     val payingUsers = generateActor(
-      PayingUsers.props(sc, List(avgPurchasesSession, avgPurchasesUser, avgTimeBetweenPurchases)),
+      PayingUsers.props(sc, List(avgPurchasesSession, avgPurchasesUser, avgTimeBetweenPurchases/**, avgTimeFirstPurchase**/)),
       generateName("payingUsers")
     )
     val numberSessions = generateActor(
@@ -102,6 +107,7 @@ class Supervisor(
     avgPurchasesUser ! CoreJobDependency(List(payingUsers))
     avgTimeBetweenPurchases ! CoreJobDependency(List(payingUsers))
     ltv ! CoreJobDependency(List(arpu, nrSessionsPerUsers))
+    //avgTimeFirstPurchase ! CoreJobDependency(List(payingUsers))
 
     buffer += totalRevenue
     buffer += activeUsers

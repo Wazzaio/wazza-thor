@@ -28,7 +28,7 @@ object AveragePurchasesUser {
 class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
   import context._
 
-  def inputCollectionType: String = "purchases"
+  def inputCollectionType: String = "payingUsers"
   def outputCollectionType: String = "avgPurchasesUser"
 
   private def saveResultToDatabase(
@@ -53,6 +53,8 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
   }
 
   def executeJob(
+    inputCollection: String,
+    outputCollection: String,
     companyName: String,
     applicationName: String,
     start: Date,
@@ -60,46 +62,54 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
-    val dateFields = ("lowerDate", "upperDate")
-    val payingUsersCollName = s"${companyName}_payingUsers_${applicationName}"
-    val uri = MongoClientURI(ThorContext.URI)
-    val mongoClient = MongoClient(uri)
-    val payingUsersCollection = mongoClient(uri.database.getOrElse("dev"))(payingUsersCollName)
-    
-    val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    val payingUsers = payingUsersCollection.findOne(query).getOrElse(None)
+    val inputUri = s"${ThorContext.URI}.${inputCollection}"    
+    val jobConfig = new Configuration
+    jobConfig.set("mongo.input.uri", inputUri)
+    jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    payingUsers match {
-      case None => {
-        log.error("cannot find elements")
-        promise.failure(new Exception)
-      }
-      case p => {
-        val UserKey = "user"
-        val PurchasesKey = "purchases"
-        val mapResult = (Json.parse(p.toString) \ "payingUsers").as[JsArray].value.foldLeft(Map.empty[String, Double]){(map, el) =>
-          val userPurchases = (el \ "purchases").as[JsArray].value.size
-          val storedPurchases = map getOrElse(PurchasesKey, 0.0)
-          val storedUsers = map getOrElse(UserKey, 0.0)
-          map += (UserKey -> (storedUsers + 1))
-          map += (PurchasesKey -> (storedPurchases + userPurchases))
-        }
+    val payingUsersRDD = sc.newAPIHadoopRDD(
+      jobConfig,
+      classOf[com.mongodb.hadoop.MongoInputFormat],
+      classOf[Object],
+      classOf[BSONObject]
+    )/**.filter((t: Tuple2[Object, BSONObject]) => {
+       def parseFloat(d: String): Option[Long] = {
+       try { Some(d.toLong) } catch { case _: Throwable => None }
+       }
+       parseFloat(t._2.get("time").toString) match {
+       case Some(dbDate) => {
+       val startDate = new Date(dbDate)
+       startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
+       }
+       case _ => false
+       }
+       })**/
 
-        val result = if(mapResult(UserKey) > 0) mapResult(PurchasesKey) / mapResult(UserKey) else 0
-        saveResultToDatabase(
-          ThorContext.URI,
-          getCollectionOutput(companyName, applicationName),
-          result,
-          start,
-          end,
-          companyName,
-          applicationName
-        )
-        promise.success()
+    if(payingUsersRDD.count > 0) {
+      val payingUsers = payingUsersRDD map {element =>
+        val purchases = (Json.parse(element._2.get("purchases").toString)).as[JsArray].value.size
+        (element._2.get("userId").toString, purchases)
       }
+
+      val nrUsers = payingUsers.keys.count
+      val nrPurchases = payingUsers.values.reduce(_+_)
+      val result = if(nrUsers > 0) nrPurchases / nrUsers else 0
+      saveResultToDatabase(
+        ThorContext.URI,
+        getCollectionOutput(companyName, applicationName),
+        result,
+        start,
+        end,
+        companyName,
+        applicationName
+      )
+      promise.success()
+
+    } else {
+      log.error("Count is zero")
+      promise.failure(new Exception)
     }
 
-    mongoClient.close
     promise.future
   }
 
@@ -111,7 +121,14 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, upper, lower) map { arpu =>
+        executeJob(
+          getCollectionInput(companyName, applicationName),
+          getCollectionOutput(companyName, applicationName),
+          companyName,
+          applicationName,
+          upper,
+          lower
+        ) map { arpu =>
           log.info("Job completed successful")
           onJobSuccess(companyName, applicationName, "Average Revenue Per Session")
         } recover {

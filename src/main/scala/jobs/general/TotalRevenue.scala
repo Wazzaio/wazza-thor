@@ -67,7 +67,6 @@ class TotalRevenue(
     val promise = Promise[Unit]
     val inputUri = s"${ThorContext.URI}.${inputCollection}"
     val outputUri = s"${ThorContext.URI}.${outputCollection}"
-    val df = new SimpleDateFormat("yyyy/MM/dd")
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.output.uri", outputUri)
@@ -97,7 +96,7 @@ class TotalRevenue(
       val totalRevenue = mongoRDD.map(arg => {
         val price = arg._2.get("price").toString.toDouble
         price
-      }).reduce(_ + _)
+      }).sum//reduce(_ + _)
 
       saveResultToDatabase(
         ThorContext.URI,

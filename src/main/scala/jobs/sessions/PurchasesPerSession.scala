@@ -26,7 +26,7 @@ object PurchasesPerSession {
 class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
   import context._
 
-  def inputCollectionType: String = "purchases"
+  def inputCollectionType: String = "payingUsers"
   def outputCollectionType: String = "PurchasesPerSession"
 
   private def saveResultToDatabase(
@@ -50,6 +50,49 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     client.close
   }
 
+  private def getNumberPurchases(
+    inputCollection: String,
+    companyName: String,
+    applicationName: String,
+    start: Date,
+    end: Date
+  ): Double = {
+    val inputUri = s"${ThorContext.URI}.${inputCollection}"
+    val jobConfig = new Configuration
+    jobConfig.set("mongo.input.uri", inputUri)
+    jobConfig.set("mongo.input.split.create_input_splits", "false")
+
+    val payingUsersRDD = sc.newAPIHadoopRDD(
+      jobConfig,
+      classOf[com.mongodb.hadoop.MongoInputFormat],
+      classOf[Object],
+      classOf[BSONObject]
+    )/**.filter((t: Tuple2[Object, BSONObject]) => {
+       def parseFloat(d: String): Option[Long] = {
+       try { Some(d.toLong) } catch { case _: Throwable => None }
+       }
+       parseFloat(t._2.get("time").toString) match {
+       case Some(dbDate) => {
+       val startDate = new Date(dbDate)
+       startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
+       }
+       case _ => false
+       }
+       })**/
+
+    if(payingUsersRDD.count > 0) {
+      val payingUsers = payingUsersRDD map {element =>
+        val purchases = (Json.parse(element._2.get("purchases").toString)).as[JsArray].value.size
+        (element._2.get("userId").toString, purchases)
+      }
+      payingUsers.values.reduce(_+_)
+    } else {
+      log.error("Count is zero")
+      -1
+    }
+
+  }
+
   def executeJob(
     companyName: String,
     applicationName: String,
@@ -59,29 +102,29 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     val promise = Promise[Unit]
 
     val dateFields = ("lowerDate", "upperDate")
-    val payingUsersCollName = s"${companyName}_payingUsers_${applicationName}"
     val nrSessionsCollName = s"${companyName}_numberSessions_${applicationName}"
     val uri = MongoClientURI(ThorContext.URI)
     val mongoClient = MongoClient(uri)
-    val payingUsersCollection = mongoClient(uri.database.getOrElse("dev"))(payingUsersCollName)
     val nrSessionsCollection = mongoClient(uri.database.getOrElse("dev"))(nrSessionsCollName)
-    
     val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
     val nrSessions = nrSessionsCollection.findOne(query).getOrElse(None)
-    val payingUsers = payingUsersCollection.findOne(query).getOrElse(None)
 
-    (nrSessions, payingUsers) match {
-      case (None, None) => {
+    nrSessions match {
+      case None => {
         log.error("cannot find elements")
         promise.failure(new Exception)
       }
-      case (sessions, users) => {
+      case sessions => {
         val nrSessions = (Json.parse(sessions.toString) \ "totalSessions").as[Int]
-        val nrPurchases = (Json.parse(users.toString) \ "payingUsers").as[JsArray].value.foldLeft(0.0)((sum, obj) => {
-          sum + (obj \ "purchases").as[JsArray].value.size
-        })
+        val nrPurchases = getNumberPurchases(
+          getCollectionInput(companyName, applicationName),
+          companyName,
+          applicationName,
+          start,
+          end
+        )
 
-        val result = if(nrSessions > 0) nrPurchases / nrSessions else 0
+        val result = if(nrSessions > 0 && nrPurchases != -1) nrPurchases / nrSessions else 0
         saveResultToDatabase(
           ThorContext.URI,
           getCollectionOutput(companyName, applicationName),
@@ -96,7 +139,6 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     }
 
     mongoClient.close
-
     promise.future
   }
 
