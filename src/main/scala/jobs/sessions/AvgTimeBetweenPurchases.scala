@@ -70,46 +70,40 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
     val payingUsersCollection = mongoClient(uri.database.getOrElse("dev"))(payingUsersCollName)
 
     val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    val payingUsersOpt = payingUsersCollection.findOne(query).getOrElse(None)
 
-    payingUsersOpt match {
-      case None => {
-        log.error("cannot find elements")
-        promise.failure(new Exception)
-      }
-      case payingUsers => {
-        var numberPurchases = 0
-        var accTime = 0.0
-        for {
-          userInfo <- (Json.parse(payingUsers.toString) \ "payingUsers").as[JsArray].value
-        } {
-          val purchases = (userInfo \ "purchases").as[JsArray].value.zipWithIndex
-          for(purchaseInfo <- purchases) {
-            val index = purchaseInfo._2
-            if(purchases.size == 1) {
-              numberPurchases += 1
-            } else {
-              if((index+1) < purchases.size ) {
-                val currentPurchaseDate = new Date((purchaseInfo._1 \ "purchaseTime").as[Float].longValue)
-                val nextPurchaseDate = new Date((purchases(index+1)._1 \ "purchaseTime").as[Float].longValue)
-                accTime += getNumberSecondsBetweenDates(currentPurchaseDate, nextPurchaseDate)
-              }
-            }
+    var numberPurchases = 0
+    var accTime = 0.0
+    payingUsersCollection.find(query) foreach {element =>
+      val purchases = (Json.parse(element.toString) \ "purchases").as[JsArray].value.zipWithIndex
+      for(purchaseInfo <- purchases) {
+        val index = purchaseInfo._2
+        if(purchases.size == 1) {
+          numberPurchases += 1
+        } else {
+          if((index+1) < purchases.size ) {
+            val currentPurchaseDate = new Date((purchaseInfo._1 \ "time").as[Float].longValue)
+            val nextPurchaseDate = new Date((purchases(index+1)._1 \ "time").as[Float].longValue)
+            accTime += getNumberSecondsBetweenDates(currentPurchaseDate, nextPurchaseDate)
           }
         }
-
-        val result =  if(numberPurchases == 0) 0 else accTime / numberPurchases
-        saveResultToDatabase(
-          ThorContext.URI,
-          getCollectionOutput(companyName, applicationName),
-          result,
-          start,
-          end,
-          companyName,
-          applicationName
-        )
-        promise.success()
       }
+    }
+
+    if(numberPurchases > 0 && accTime > 0) {
+      val result =  if(numberPurchases == 0) 0 else accTime / numberPurchases
+      saveResultToDatabase(
+        ThorContext.URI,
+        getCollectionOutput(companyName, applicationName),
+        result,
+        start,
+        end,
+        companyName,
+        applicationName
+      )
+      promise.success()
+    } else {
+      log.error("empty collection")
+      promise.failure(new Exception)
     }
 
     mongoClient.close
@@ -126,9 +120,9 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
         log.info("execute job")
         executeJob(companyName, applicationName, upper, lower) map { arpu =>
           log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, "Average Purchases Per Session")
+          onJobSuccess(companyName, applicationName, "Average Time Between Purchases")
         } recover {
-          case ex: Exception => onJobFailure(ex, "Average Purchases Per Session")
+          case ex: Exception => onJobFailure(ex, "Average Time Between Purchases")
         }
       }
     }
