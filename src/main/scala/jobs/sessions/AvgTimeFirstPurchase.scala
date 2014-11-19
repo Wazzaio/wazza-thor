@@ -13,14 +13,116 @@ import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import ExecutionContext.Implicits.global
-import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorContext}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
 import com.mongodb.casbah.Imports._
 import play.api.libs.json._
 import org.joda.time.LocalDate
 
-//TODO
+private object InternalSparkFunctions extends Serializable {
+
+  var companyName = ""
+  var applicationName = ""
+
+  def calculateTimeFirstPurchase(
+    info: Tuple2[String, Tuple2[Option[Int], JsValue]]
+  ): Tuple2[String, Double] = {
+    val pInfo = (Json.parse(info._2._2.toString).as[JsValue])
+    val purchaseSession = getSessionByPurchase(
+      ThorContext.URI,
+      companyName,
+      applicationName,
+      ((pInfo \ "purchaseId").as[String])
+    ).get
+
+    val timePreviousSessions = getTotalTimeFromPreviousSessions(
+      ThorContext.URI,
+      companyName,
+      applicationName,
+      purchaseSession
+    )
+
+    val timeToPurchaseInSession = calculateTimeToPurchaseWithinSession(purchaseSession, pInfo)
+    (info._1, timePreviousSessions + timeToPurchaseInSession)
+  }
+
+  def getNumberSecondsBetweenDates(d1: Date, d2: Date): Float = {
+    (new LocalDate(d2).toDateTimeAtCurrentTime.getMillis - new LocalDate(d1).toDateTimeAtCurrentTime().getMillis) / 1000
+  }
+
+  def getSessionByPurchase(
+    uriStr: String,
+    companyName: String,
+    applicationName: String,
+    purchaseId: String
+  ): Option[JsValue] = {
+    def getSessionId(): String = {
+      val collectionName = s"${companyName}_purchases_${applicationName}"
+      val uri  = MongoClientURI(uriStr)
+      val client = MongoClient(uri)
+      val collection = client.getDB(uri.database.get)(collectionName)
+      val query = MongoDBObject("id" -> purchaseId)
+      val projection = MongoDBObject("sessionId" -> 1)
+      collection.findOne(query, projection) match {
+        case None => {
+          client.close
+          null //TODO launch error
+        }
+        case Some(info) => {
+          client.close
+          (Json.parse(info.toString) \ "sessionId").as[String]
+        }
+      }
+    }
+
+    val collectionName = s"${companyName}_mobileSessions_${applicationName}"
+    val uri  = MongoClientURI(uriStr)
+    val client = MongoClient(uri)
+    val collection = client.getDB(uri.database.get)(collectionName)
+    val sessionId = getSessionId
+    val query = MongoDBObject("id" -> getSessionId)
+    collection.findOne(query) match {
+      case None => {
+        client.close
+        None
+      }
+      case Some(r) => {
+        client.close
+        Some(Json.parse(r.toString))
+      }
+    }
+  }
+
+  def getTotalTimeFromPreviousSessions(
+    uriStr: String,
+    companyName: String,
+    applicationName: String,
+    session: JsValue
+  ): Double = {
+    val collectionName = s"${companyName}_mobileSession_${applicationName}"
+    val uri  = MongoClientURI(uriStr)
+    val client = MongoClient(uri)
+    val collection = client.getDB(uri.database.get)(collectionName)
+    val sessionTime = (session \ "startTime").as[Float]
+    val query = "startTime" $lte sessionTime
+    val projection = MongoDBObject("sessionLength" -> 1)
+    val result = collection.find(query, projection).toList.foldLeft(0.0){(total,el) =>
+      total + (Json.parse(el.toString) \ "sessionLength").as[Double]
+    }
+    client.close
+    result
+  }
+
+  def calculateTimeToPurchaseWithinSession(
+    session: JsValue,
+    purchaseInfo: JsValue
+  ): Double = {
+    val sessionStartInstant = new Date((session \ "startTime").as[Float].toLong)
+    val purchaseInstant = new Date((purchaseInfo \ "time").as[Float].toLong)
+    getNumberSecondsBetweenDates(purchaseInstant, sessionStartInstant)
+  }
+}
 
 object AvgTimeFirstPurchase {
   def props(sc: SparkContext): Props = Props(new AvgTimeFirstPurchase(sc))
@@ -117,6 +219,12 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
 
       val firstTimePayingUsers = usersIds.rightOuterJoin(purchaseInfo)
       log.info(firstTimePayingUsers.collect.toList.toString)
+      InternalSparkFunctions.companyName = companyName
+      InternalSparkFunctions.applicationName = applicationName
+      val r = firstTimePayingUsers.map(InternalSparkFunctions.calculateTimeFirstPurchase)
+      log.info("RESULT")
+      log.info(r.collect.toList.toString)
+      0
     } else {
 
     }
