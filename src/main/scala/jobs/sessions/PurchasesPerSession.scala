@@ -74,7 +74,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       parseFloat(t._2.get("lowerDate").toString) match {
         case Some(dbDate) => {
           val startDate = new Date(dbDate)
-          startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
+          startDate.compareTo(start) * end.compareTo(startDate) >= 0
         }
         case _ => false
       }
