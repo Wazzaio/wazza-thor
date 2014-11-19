@@ -50,15 +50,12 @@ object JobRunner extends App {
   override def main(args: Array[String]): Unit = {
     val lower = new DateMidnight()
     val upper = lower.plusDays(1)
-    val e = new LocalDate().minusDays(1)
-    val s = e.minusDays(7)
     for {
-      c <- List("DemoCompany")//getCompanies
-      app <- List("Demo")//c.apps
+      c <- getCompanies
+      app <- c.apps
     } {
-      println(c)
-      val supervisorName = s"${c}_supervisor_${app}".replace(' ','.') //s"${c.name}_supervisor_${app}".replace(' ','.')
-      system.actorOf(Supervisor.props(/**c.name**/c, app, lower.toDate, upper.toDate, system, sc) , name = supervisorName)
+      val supervisorName = s"${c.name}_supervisor_${app}".replace(' ','.')
+      system.actorOf(Supervisor.props(c.name, app, lower.toDate, upper.toDate, system, sc) , name = supervisorName)
     }
 	}
 }
