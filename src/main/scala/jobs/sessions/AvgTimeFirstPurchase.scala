@@ -24,20 +24,35 @@ private object InternalSparkFunctions extends Serializable {
 
   var companyName = ""
   var applicationName = ""
+  private var mongoClient: MongoClient = null
+  private var mongoURI: com.mongodb.casbah.MongoClientURI = null
+
+  def bootstrap(c: String, a: String, uriStr: String) = {
+    companyName = c
+    applicationName = a
+    mongoURI  = com.mongodb.casbah.MongoClientURI(uriStr)
+    mongoClient = MongoClient(mongoURI)
+  }
+
+  def destroy = {
+    mongoClient.close
+  }
+
+  def getCollection(name: String) = {
+    mongoClient.getDB(mongoURI.database.get)(name)
+  }
 
   def calculateTimeFirstPurchase(
     info: Tuple2[String, Tuple2[Option[Int], JsValue]]
   ): Tuple2[String, Double] = {
     val pInfo = (Json.parse(info._2._2.toString).as[JsValue])
     val purchaseSession = getSessionByPurchase(
-      ThorContext.URI,
       companyName,
       applicationName,
       ((pInfo \ "purchaseId").as[String])
     ).get
 
     val timePreviousSessions = getTotalTimeFromPreviousSessions(
-      ThorContext.URI,
       companyName,
       applicationName,
       purchaseSession
@@ -52,66 +67,52 @@ private object InternalSparkFunctions extends Serializable {
   }
 
   def getSessionByPurchase(
-    uriStr: String,
     companyName: String,
     applicationName: String,
     purchaseId: String
   ): Option[JsValue] = {
     def getSessionId(): String = {
       val collectionName = s"${companyName}_purchases_${applicationName}"
-      val uri  = MongoClientURI(uriStr)
-      val client = MongoClient(uri)
-      val collection = client.getDB(uri.database.get)(collectionName)
+      val collection = getCollection(collectionName)
       val query = MongoDBObject("id" -> purchaseId)
       val projection = MongoDBObject("sessionId" -> 1)
       collection.findOne(query, projection) match {
         case None => {
-          client.close
           null //TODO launch error
         }
         case Some(info) => {
-          client.close
           (Json.parse(info.toString) \ "sessionId").as[String]
         }
       }
     }
 
     val collectionName = s"${companyName}_mobileSessions_${applicationName}"
-    val uri  = MongoClientURI(uriStr)
-    val client = MongoClient(uri)
-    val collection = client.getDB(uri.database.get)(collectionName)
+    val collection = getCollection(collectionName)
     val sessionId = getSessionId
     val query = MongoDBObject("id" -> getSessionId)
     collection.findOne(query) match {
       case None => {
-        client.close
         None
       }
       case Some(r) => {
-        client.close
         Some(Json.parse(r.toString))
       }
     }
   }
 
   def getTotalTimeFromPreviousSessions(
-    uriStr: String,
     companyName: String,
     applicationName: String,
     session: JsValue
   ): Double = {
-    val collectionName = s"${companyName}_mobileSession_${applicationName}"
-    val uri  = MongoClientURI(uriStr)
-    val client = MongoClient(uri)
-    val collection = client.getDB(uri.database.get)(collectionName)
+    val collectionName = s"${companyName}_mobileSessions_${applicationName}"
+    val collection = getCollection(collectionName)
     val sessionTime = (session \ "startTime").as[Float]
     val query = "startTime" $lte sessionTime
     val projection = MongoDBObject("sessionLength" -> 1)
-    val result = collection.find(query, projection).toList.foldLeft(0.0){(total,el) =>
+    collection.find(query, projection).toList.foldLeft(0.0){(total,el) =>
       total + (Json.parse(el.toString) \ "sessionLength").as[Double]
     }
-    client.close
-    result
   }
 
   def calculateTimeToPurchaseWithinSession(
@@ -184,7 +185,6 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
 
     val collection = getCollectionInput(companyName, applicationName)
     val inputUri = s"${ThorContext.URI}.${collection}"
-    log.info("INPUT URI " + inputUri)
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
@@ -218,15 +218,24 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
       }}
 
       val firstTimePayingUsers = usersIds.rightOuterJoin(purchaseInfo)
-      log.info(firstTimePayingUsers.collect.toList.toString)
-      InternalSparkFunctions.companyName = companyName
-      InternalSparkFunctions.applicationName = applicationName
-      val r = firstTimePayingUsers.map(InternalSparkFunctions.calculateTimeFirstPurchase)
-      log.info("RESULT")
-      log.info(r.collect.toList.toString)
-      0
+      InternalSparkFunctions.bootstrap(companyName, applicationName, ThorContext.URI)
+      log.info("Calculating ...")
+      val result = firstTimePayingUsers.map(InternalSparkFunctions.calculateTimeFirstPurchase)
+      val avgTimeFirstPurchase = result.values.mean
+      InternalSparkFunctions.destroy
+      saveResultToDatabase(
+        ThorContext.URI,
+        getCollectionOutput(companyName, applicationName),
+        avgTimeFirstPurchase,
+        start,
+        end,
+        companyName,
+        applicationName
+      )
+      promise.success()
     } else {
-
+      log.error("Count is zero")
+      promise.failure(new Exception)
     }
     promise.future
   }
@@ -241,9 +250,9 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
         log.info("execute job")
         executeJob(companyName, applicationName, upper, lower) map { arpu =>
           log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, "Average Purchases Per Session")
+          onJobSuccess(companyName, applicationName, "Average Time First Purchase")
         } recover {
-          case ex: Exception => onJobFailure(ex, "Average Purchases Per Session")
+          case ex: Exception => onJobFailure(ex, "Average Time First Purchase")
         }
       }
     }
