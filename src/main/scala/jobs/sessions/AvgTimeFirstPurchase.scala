@@ -194,7 +194,7 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    )/**.filter(element => {
+    ).filter(element => {
       def parseFloat(d: String): Option[Long] = {
         try { Some(d.toLong) } catch { case _: Throwable => None }
       }
@@ -206,7 +206,7 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
         }
         case _ => false
       }
-    })**/
+    })
 
     if(payingUsersRDD.count > 0) {
       val payingUsers = payingUsersRDD map {_._2.get("userId").toString}

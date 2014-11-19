@@ -77,7 +77,7 @@ class TotalRevenue(
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    )/**.filter(t => {
+    ).filter(t => {
 
       def parseFloat(d: String): Option[Long] = {
         try { Some(d.toLong) } catch { case _: Throwable => None }
@@ -90,7 +90,7 @@ class TotalRevenue(
         }
         case _ => false
       }
-    })**/
+    })
 
     if(mongoRDD.count() > 0) {
       val totalRevenue = mongoRDD.map(arg => {

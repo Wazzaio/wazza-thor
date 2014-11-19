@@ -100,7 +100,7 @@ class NumberSessionsPerUser(
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    )/**.filter((t: Tuple2[Object, BSONObject]) => {
+    ).filter((t: Tuple2[Object, BSONObject]) => {
       def parseFloat(d: String): Option[Long] = {
         try { Some(d.toLong) } catch { case _: Throwable => None }
       }
@@ -112,7 +112,7 @@ class NumberSessionsPerUser(
         }
         case _ => false
        }
-    })**/
+    })
 
     val count = mongoRDD.count()
     if(count > 0) {

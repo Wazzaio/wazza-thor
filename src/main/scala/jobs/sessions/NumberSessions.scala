@@ -74,7 +74,7 @@ class NumberSessions(
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    )/**.filter((t: Tuple2[Object, BSONObject]) => {
+    ).filter((t: Tuple2[Object, BSONObject]) => {
       def parseFloat(d: String): Option[Long] = {
         try { Some(d.toLong) } catch { case _: Throwable => None }
       }
@@ -86,7 +86,7 @@ class NumberSessions(
         }
         case _ => false
       }
-    })**/
+    })
 
     val count = mongoRDD.count()
     if(count > 0) {
