@@ -55,6 +55,20 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
     client.close
   }
 
+  private def getAllBuyers(companyName: String, applicationName: String) = {
+    val collectionName = s"${companyName}_${Buyers}_${applicationName}"
+    val inputUri = s"${ThorContext.URI}.${collectionName}"
+    val jobConfig = new Configuration
+    jobConfig.set("mongo.input.uri", inputUri)
+    jobConfig.set("mongo.input.split.create_input_splits", "false")
+    sc.newAPIHadoopRDD(
+      jobConfig,
+      classOf[com.mongodb.hadoop.MongoInputFormat],
+      classOf[Object],
+      classOf[BSONObject]
+    ) map { _._2.get("userId").toString}
+  }
+
   def executeJob(
     companyName: String,
     applicationName: String,
@@ -62,57 +76,50 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
     end: Date
   ): Future[Unit] = {
     val promise = Promise[Unit]
-
-    def getBuyersCollection(uriStr: String): List[String] = {
-      val collectionName = s"${companyName}_${Buyers}_${applicationName}"
-      val uri  = MongoClientURI(uriStr)
-      val client = MongoClient(uri)
-      val collection = client.getDB(uri.database.get)(collectionName)
-      val buyers = collection.findOne().get
-      val result = (Json.parse(buyers.toString) \ "buyers").as[List[String]]
-      client.close
-      result
-    }
-
     def getNumberSecondsBetweenDates(d1: Date, d2: Date): Float = {
       (new LocalDate(d2).toDateTimeAtCurrentTime.getMillis - new LocalDate(d1).toDateTimeAtCurrentTime().getMillis) / 1000
     }
 
-    val inputUri = s"${ThorContext.URI}.${getCollectionInput(companyName, applicationName)}"
+    val collection = getCollectionInput(companyName, applicationName)
+    val inputUri = s"${ThorContext.URI}.${collection}"
+    log.info("INPUT URI " + inputUri)
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    //TODO use subtract
-    val firstTimeBuysRDD = sc.newAPIHadoopRDD(
+    val payingUsersRDD = sc.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter(element => {
+    )/**.filter(element => {
       def parseFloat(d: String): Option[Long] = {
         try { Some(d.toLong) } catch { case _: Throwable => None }
       }
 
-      parseFloat(element._2.get("time").toString) match {
+       parseFloat(element._2.get("lowerDate").toString) match {
         case Some(dbDate) => {
           val startDate = new Date(dbDate)
           startDate.compareTo(start) * end.compareTo(startDate) >= 0
         }
         case _ => false
       }
-    })
+    })**/
 
-    log.info("LEG")
-    log.info(firstTimeBuysRDD.collect.toList.toString)
+    if(payingUsersRDD.count > 0) {
+      val payingUsers = payingUsersRDD map {_._2.get("userId").toString}
+      val allPayingUsers = getAllBuyers(companyName, applicationName)
+      val usersIds = payingUsers.subtract(allPayingUsers).map {(_, 1)}
+      val purchaseInfo = payingUsersRDD.map {purchases => {
+        val pList = Json.parse(purchases._2.get("purchases").toString).as[JsArray].value
+        (purchases._2.get("userId").toString, pList.head)
+      }}
 
-    val dateFields = ("lowerDate", "upperDate")
-    val payingUsersCollName = s"${companyName}_payingUsers_${applicationName}"
-    val uri = MongoClientURI(ThorContext.URI)
-    val mongoClient = MongoClient(uri)
-    val payingUsersCollection = mongoClient(uri.database.getOrElse("dev"))(payingUsersCollName)
-    val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    mongoClient.close
+      val firstTimePayingUsers = usersIds.rightOuterJoin(purchaseInfo)
+      log.info(firstTimePayingUsers.collect.toList.toString)
+    } else {
+
+    }
     promise.future
   }
 

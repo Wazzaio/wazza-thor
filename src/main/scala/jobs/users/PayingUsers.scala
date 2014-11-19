@@ -28,7 +28,7 @@ object PayingUsers {
   def props(ctx: SparkContext, d: List[ActorRef]): Props = Props(new PayingUsers(ctx, d))
 }
 
-sealed case class PurchaseInfo(purchaseId: String, time: Float)
+case class PurchaseInfo(purchaseId: String, time: Float)
 sealed case class UserPurchases(userId: String, purchases: List[PurchaseInfo], lowerDate: Float, upperDate: Float)
 
 class PayingUsers(
@@ -113,7 +113,7 @@ class PayingUsers(
        def parseFloat(d: String): Option[Long] = {
          try { Some(d.toLong) } catch { case _: Throwable => None }
        }
-       parseFloat(t._2.get("time").toString) match {
+       parseFloat(t._2.get("lowerDate").toString) match {
          case Some(dbDate) => {
            val startDate = new Date(dbDate)
            startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
