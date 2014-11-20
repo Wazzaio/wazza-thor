@@ -150,7 +150,7 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val obj = MongoDBObject(
-      "avgTimeBetweenPurchases" -> result,
+      "avgTimeFirstPurchase" -> result,
       "lowerDate" -> start.getTime,
       "upperDate" -> end.getTime
     )
