@@ -30,3 +30,6 @@ resolvers += "JCenter" at "http://jcenter.bintray.com/"
 
 // For stable releases
 resolvers += "Sonatype releases" at "https://oss.sonatype.org/content/repositories/releases"
+
+mainClass in assembly := Some("wazza.thor.JobRunner")
+
