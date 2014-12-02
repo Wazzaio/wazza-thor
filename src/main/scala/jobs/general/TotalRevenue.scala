@@ -80,7 +80,7 @@ class TotalRevenue(
     ).filter(t => {
 
       def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toLong) } catch { case _: Throwable => None }
+        try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
       }
 
       parseFloat(t._2.get("time").toString) match {
@@ -109,6 +109,26 @@ class TotalRevenue(
       )
       promise.success()
     } else  {
+      /**
+      val x = ctx.newAPIHadoopRDD(
+        jobConfig,
+        classOf[com.mongodb.hadoop.MongoInputFormat],
+        classOf[Object],
+        classOf[BSONObject]
+      )
+
+      def parseFloat(d: String): Option[Long] = {
+        try { Some(d.toLong) } catch { case _: Throwable => None }
+      }
+
+      log.info("ARSE")
+      log.info(s"TOTAL REVENUE --- ${inputUri} ||  lowerDate ${lowerDate} upperDate ${upperDate}")
+      val el = x.collect.toList.head
+      log.info(el.toString)
+      val d = el._2.get("time").toString.toDouble.toLong
+      log.info(s"PURCHASE DATE ${(new Date(d)).toString}")
+        * */
+
       log.error("Count is zero")
       promise.failure(new Exception)
     }

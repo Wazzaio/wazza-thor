@@ -76,7 +76,7 @@ class NumberSessions(
       classOf[BSONObject]
     ).filter((t: Tuple2[Object, BSONObject]) => {
       def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toLong) } catch { case _: Throwable => None }
+        try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
       }
 
       parseFloat(t._2.get("startTime").toString) match {

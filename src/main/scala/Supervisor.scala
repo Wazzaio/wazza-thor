@@ -41,7 +41,13 @@ class Supervisor(
 
   def initJobs() = {
     log.info("Creating jobs")
-    def generateName(name: String) = s"${companyName}_${name}_${appName}"
+    def generateName(name: String) = {
+      import java.text.SimpleDateFormat
+      val df = new SimpleDateFormat("yyyy_MM_dd")
+      val dayId = df.format(start)
+      val n = s"${companyName}_${name}_${appName}_${dayId}"
+      n.replaceAll(" ","_")
+    }
     var buffer = new ListBuffer[ActorRef]
 
     val ltv = generateActor(

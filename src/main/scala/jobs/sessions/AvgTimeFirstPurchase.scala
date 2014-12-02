@@ -196,7 +196,7 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
       classOf[BSONObject]
     ).filter(element => {
       def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toLong) } catch { case _: Throwable => None }
+        try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
       }
 
        parseFloat(element._2.get("lowerDate").toString) match {
