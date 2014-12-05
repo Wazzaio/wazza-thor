@@ -48,7 +48,7 @@ object JobRunner extends App {
   }
 
   private def runTestMode(companyName: String, applicationName: String): Unit = {
-    ThorContext.URI = "mongodb://wazza:1234@wazza-mongo-dev.cloudapp.net:27018/dev"
+    ThorContext.URI = "mongodb://wazza-db-dev.cloudapp.net:27017/dev"
     val end = new LocalDate()
     val start = end.minusDays(7)
     val days = Days.daysBetween(start, end).getDays()+1
