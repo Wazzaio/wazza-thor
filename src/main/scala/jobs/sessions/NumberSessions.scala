@@ -107,7 +107,7 @@ class NumberSessions(
   def kill = stop(self)
 
   def receive = {
-    case InitJob(companyName, applicationName, lowerDate, upperDate) => {
+    case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
       log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
       supervisor = sender
       executeJob(
