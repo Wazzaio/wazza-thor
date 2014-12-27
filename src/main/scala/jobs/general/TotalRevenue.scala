@@ -1,19 +1,19 @@
 package wazza.thor.jobs
 
-import com.mongodb.BasicDBObject
-import com.mongodb.MongoClient
-import com.mongodb.MongoClientURI
+import com.mongodb.casbah.Imports._
 import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
 import org.apache.hadoop.conf.Configuration
+import org.apache.spark.rdd.RDD
 import org.bson.BSONObject
-import org.bson.BasicBSONObject
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
+import play.api.libs.json.JsValue
+import play.api.libs.json.Json
+import scala.collection.mutable.ListBuffer
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
@@ -32,26 +32,37 @@ class TotalRevenue(
 
   dependants = d
 
+  private case class PlatformResults(platform: String, res: Double)
+  private case class Results(
+    totalRevenue: Double,
+    platforms: List[PlatformResults],
+    lowerDate: Date,
+    upperDate: Date
+  )
+
+  private def resultsToMongo(results: Results): MongoDBObject = {
+    MongoDBObject(
+      "totalRevenue" -> results.totalRevenue,
+      "platforms" -> (results.platforms map {p => MongoDBObject("platform" -> p.platform, "res" -> p.res)}),
+      "lowerDate" -> results.lowerDate,
+      "upperDate" -> results.upperDate
+    )
+  }
+
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "TotalRevenue"
 
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    totalRevenue: Double,
-    lowerDate: Date,
-    upperDate: Date,
+    results: Results,
     companyName: String,
     applicationName: String
   ) = {
-    val uri  = new MongoClientURI(uriStr)
-    val client = new MongoClient(uri)
-    val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
-    val result = new BasicDBObject
-    result.put("totalRevenue", totalRevenue)
-    result.put("lowerDate", lowerDate.getTime)
-    result.put("upperDate", upperDate.getTime)
-    collection.insert(result)
+    val uri  = MongoClientURI(uriStr)
+    val client = MongoClient(uri)
+    val collection = client.getDB(uri.database.get).getCollection(collectionName)
+    collection.insert(resultsToMongo(results))
     client.close()
   }
 
@@ -61,10 +72,13 @@ class TotalRevenue(
     lowerDate: Date,
     upperDate: Date,
     companyName: String,
-    applicationName: String
+    applicationName: String,
+    platforms: List[String]
   ): Future[Unit] = {
 
     val promise = Promise[Unit]
+
+    // Creates RDD based on configuration
     val inputUri = s"${ThorContext.URI}.${inputCollection}"
     val outputUri = s"${ThorContext.URI}.${outputCollection}"
     val jobConfig = new Configuration
@@ -72,63 +86,60 @@ class TotalRevenue(
     jobConfig.set("mongo.output.uri", outputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val mongoRDD = ctx.newAPIHadoopRDD(
+    val rdd = ctx.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter(t => {
+    )
+    val emptyRDD = ctx.emptyRDD
 
-      def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
-      }
-
-      parseFloat(t._2.get("time").toString) match {
-        case Some(dbDate) => {
-          val startDate = new Date(dbDate)
-          startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
+    // Creates an RDD with data of mobile platform
+    val rdds = platforms map {p =>
+      val filteredRDD = rdd.filter(t => {
+        def parseDate(d: String): Option[Date] = {
+          try {
+            val Format = "E MMM dd HH:mm:ss Z yyyy"
+            Some(new SimpleDateFormat(Format).parse(d))
+          } catch {case _: Throwable => None }
         }
-        case _ => false
+
+        val dateStr = t._2.get("time").toString
+        val t2 = parseDate(dateStr)
+        val time = parseDate(dateStr) match {
+          case Some(startDate) => {
+            startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
+          } 
+          case _ => false
+        }
+        val platform = (Json.parse(t._2.get("device").toString) \ "osType").as[String] == p
+        time && platform
+      })
+      (p, if(filteredRDD.count > 0) rdd else emptyRDD)
+    }
+
+    // Calculates results per platform
+    val platformResults = rdds map {rdd =>
+      if(rdd._2.count() > 0) {
+        val totalRevenue = rdd._2.map(arg => {
+          val price = arg._2.get("price").toString.toDouble
+          price
+        }).sum
+        new PlatformResults(rdd._1, totalRevenue)
+      } else {
+        null
       }
-    })
+    }
 
-    if(mongoRDD.count() > 0) {
-      val totalRevenue = mongoRDD.map(arg => {
-        val price = arg._2.get("price").toString.toDouble
-        price
-      }).sum//reduce(_ + _)
-
-      saveResultToDatabase(
-        ThorContext.URI,
-        outputCollection,
-        totalRevenue,
-        lowerDate,
-        upperDate,
-        companyName,
-        applicationName
-      )
+    // Calculates total results and persist them
+    if(!platformResults.exists(_ == null)) {
+      val totalRevenue = platformResults.foldLeft(0.0){(acc, element) =>
+        acc + element.res
+      }
+      val results = new Results(totalRevenue, platformResults, lowerDate, upperDate)
+      saveResultToDatabase(ThorContext.URI, outputCollection, results, companyName, applicationName)
       promise.success()
-    } else  {
-      /**
-      val x = ctx.newAPIHadoopRDD(
-        jobConfig,
-        classOf[com.mongodb.hadoop.MongoInputFormat],
-        classOf[Object],
-        classOf[BSONObject]
-      )
-
-      def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toLong) } catch { case _: Throwable => None }
-      }
-
-      log.info("ARSE")
-      log.info(s"TOTAL REVENUE --- ${inputUri} ||  lowerDate ${lowerDate} upperDate ${upperDate}")
-      val el = x.collect.toList.head
-      log.info(el.toString)
-      val d = el._2.get("time").toString.toDouble.toLong
-      log.info(s"PURCHASE DATE ${(new Date(d)).toString}")
-        * */
-
+    } else {
       log.error("Count is zero")
       promise.failure(new Exception)
     }
@@ -139,7 +150,7 @@ class TotalRevenue(
   def kill = stop(self)
 
   def receive = {
-    case InitJob(companyName ,applicationName, lowerDate, upperDate) => {
+    case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
       log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
       supervisor = sender
       executeJob(
@@ -148,7 +159,8 @@ class TotalRevenue(
         lowerDate,
         upperDate,
         companyName,
-        applicationName
+        applicationName,
+        platforms
       ) map {res =>
         log.info("Job completed successful")
         onJobSuccess(companyName, applicationName, "Total Revenue", lowerDate, upperDate)
