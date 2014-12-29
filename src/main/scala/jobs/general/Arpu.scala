@@ -12,7 +12,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
@@ -58,42 +57,29 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
-    val dateFields = ("lowerDate", "upperDate")
     val revCollName = s"${companyName}_TotalRevenue_${applicationName}"
     val activeCollName = s"${companyName}_activeUsers_${applicationName}"
-    val uri = MongoClientURI(ThorContext.URI)
-    val mongoClient = MongoClient(uri)
-    val revCollection = mongoClient(uri.database.getOrElse("dev"))(revCollName)
-    val activeCollection = mongoClient(uri.database.getOrElse("dev"))(activeCollName)
-    
-    val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    val activeUsers = activeCollection.findOne(query).getOrElse(None)
-    val totalRevenue = revCollection.findOne(query).getOrElse(None)
 
-    (activeUsers, totalRevenue) match {
-      case (None, None) => {
-        log.info("cannot find elements")
-        promise.failure(new Exception)
-      }
-      case (active, revenue) => {
-        val a = (Json.parse(active.toString) \ "activeUsers").as[Int]
-        val r = (Json.parse(revenue.toString) \ "totalRevenue").as[Double]
-        val arpu = if(a > 0) r / a else 0
-        
-        saveResultToDatabase(
-          ThorContext.URI,
-          getCollectionOutput(companyName, applicationName),
-          arpu,
-          start,
-          end,
-          companyName,
-          applicationName
-        )
+    val optRevenue = getResultsByDateRange(revCollName, start, end)
+    val optActive = getResultsByDateRange(activeCollName, start, end)
+
+    (optRevenue, optActive) match {
+      case (Some(totalRevenue), Some(activeUsers)) => {
+        val arpu = if(activeUsers.result > 0) totalRevenue.result / activeUsers.result else 0
+        val platformResults = (totalRevenue.platforms zip activeUsers.platforms).sorted map {p =>
+          val pArpu = if(p._2.res > 0) p._1.res / p._2.res else 0
+          new PlatformResults(p._1.platform, pArpu)
+        }
+
+        val results = new Results(arpu, platformResults, start, end)
+        saveResultToDatabase(ThorContext.URI, getCollectionOutput(companyName, applicationName), results)
         promise.success()
       }
+      case _ => {
+        log.error("One of collections is empty")
+        promise.failure(new Exception)
+      }
     }
-
-    mongoClient.close
 
     promise.future
   }
