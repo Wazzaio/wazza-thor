@@ -6,8 +6,11 @@ import java.util.Date
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.bson.BSONObject
+import play.api.libs.json.JsArray
+import play.api.libs.json.JsValue
 import play.api.libs.json.Json
 import com.mongodb.casbah.Imports._
+import scala.collection.immutable.StringOps
 
 trait WazzaActor {
 
@@ -54,7 +57,55 @@ trait WazzaActor {
     }
   }
 
-  protected case class PlatformResults(platform: String, res: Double)
+  protected def parseDate(json: JsValue, key: String): Date = {
+    val dateStr = (json \ key \ "$date").as[String]
+    val ops = new StringOps(dateStr)
+    new SimpleDateFormat("yyyy-MM-dd").parse(ops.take(ops.indexOf('T')))
+  }
+
+  def getResultsByDateRange(
+    collection: String,
+    start: Date,
+    end: Date
+  ): Option[Results] = {
+    val uri = MongoClientURI(ThorContext.URI)
+    val mongoClient = MongoClient(uri)
+    val dateFields = ("lowerDate", "upperDate")
+    val coll = mongoClient(uri.database.getOrElse("dev"))(collection)
+    val query = (dateFields._1 $gte end $lte start) ++ (dateFields._2 $gte end $lte start)
+
+    coll.findOne(query) match {
+      case Some(res) => {
+        def parsePlatforms(arr: JsArray) = {
+          arr.value map {(el: JsValue) =>
+            new PlatformResults(
+              (el \ "platform").as[String],
+              (el \ "res").as[Double]
+            )
+          }
+        }
+
+        val jsonRes = Json.parse(res.toString)
+        mongoClient.close()
+        Some(new Results(
+          (jsonRes \ "result").as[Double],
+          parsePlatforms((jsonRes \ "platforms").as[JsArray]).toList,
+          parseDate(jsonRes, "lowerDate"),
+          parseDate(jsonRes, "upperDate")
+        ))
+      }
+      case _ => {
+        mongoClient.close()
+        None
+      }
+    }
+  }
+
+  protected case class PlatformResults(platform: String, res: Double) extends Ordered[PlatformResults] {
+    def compare(that: PlatformResults): Int = {
+      this.platform.compareTo(that.platform)
+    }
+  }
   protected case class Results(
     result: Double,
     platforms: List[PlatformResults],
