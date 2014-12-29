@@ -15,7 +15,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
@@ -58,46 +57,48 @@ class ActiveUsers(
     inputCollection: String,
     outputCollection: String,
     lowerDate: Date,
-    upperDate: Date
+    upperDate: Date,
+    platforms: List[String]
   ): Future[Unit] = {
 
     val promise = Promise[Unit]
     val inputUri = s"${ThorContext.URI}.${inputCollection}"
     val outputUri = s"${ThorContext.URI}.${outputCollection}"
-    val df = new SimpleDateFormat("yyyy/MM/dd")
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.output.uri", outputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
-    val mongoRDD = ctx.newAPIHadoopRDD(
+    val rdd = ctx.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter((t: Tuple2[Object, BSONObject]) => {
-      def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
+    )
+
+    // Creates an RDD with data of mobile platform
+    val rdds = getRDDPerPlatforms("startTime", platforms, rdd, lowerDate, upperDate, ctx)
+
+    // Calculates results per platform
+    val platformResults = rdds map {rdd =>
+      if(rdd._2.count() > 0) {
+        val activeUsers = rdd._2.map {arg => {
+          (arg._2.get("userId"), 1)
+        }}.groupByKey.count
+        new PlatformResults(rdd._1, activeUsers)
+      } else {
+        null
       }
+    }
 
-      parseFloat(t._2.get("startTime").toString) match {
-        case Some(dbDate) => {
-          val startDate = new Date(dbDate)
-          startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
-        }
-        case _ => false
+    if(!platforms.exists(_ == null)) {
+      val activeUsers = platformResults.foldLeft(0.0){(acc, element) =>
+        acc + element.res
       }
-    })
-
-    val count = mongoRDD.count()
-    if(count > 0) {
-      val payingUsers = (mongoRDD.map(arg => {
-        (arg._2.get("userId"), 1)
-      })).groupByKey().count()
-
-      saveResultToDatabase(ThorContext.URI, outputCollection, payingUsers.toInt, lowerDate, upperDate)
+      val results = new Results(activeUsers, platformResults, lowerDate, upperDate)
+      saveResultToDatabase(ThorContext.URI, outputCollection, results)
       promise.success()
     } else {
-      log.error("count is zero")
+      log.error("Count is zero")
       promise.failure(new Exception)
     }
 
@@ -114,7 +115,8 @@ class ActiveUsers(
         getCollectionInput(companyName, applicationName),
         getCollectionOutput(companyName, applicationName),
         lowerDate,
-        upperDate
+        upperDate,
+        platforms
       ) map {res =>
         log.info("Job completed successful")
         onJobSuccess(companyName, applicationName, "Active Users", lowerDate, upperDate)
