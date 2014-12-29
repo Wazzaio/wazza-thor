@@ -91,9 +91,7 @@ class ActiveUsers(
     }
 
     if(!platforms.exists(_ == null)) {
-      val activeUsers = platformResults.foldLeft(0.0){(acc, element) =>
-        acc + element.res
-      }
+      val activeUsers = platformResults.foldLeft(0.0)(_ + _.res)
       val results = new Results(activeUsers, platformResults, lowerDate, upperDate)
       saveResultToDatabase(ThorContext.URI, outputCollection, results)
       promise.success()

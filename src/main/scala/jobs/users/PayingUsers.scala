@@ -12,7 +12,7 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
+//import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.util.{Success,Failure}
 import scala.collection.JavaConversions._
@@ -22,14 +22,22 @@ import scala.collection.immutable.StringOps
 import wazza.thor.messages._
 import com.mongodb.casbah.Imports._
 import play.api.libs.json._
+import scala.collection.mutable._
 
 object PayingUsers {
   
   def props(ctx: SparkContext, d: List[ActorRef]): Props = Props(new PayingUsers(ctx, d))
 }
 
-case class PurchaseInfo(purchaseId: String, time: Float)
-sealed case class UserPurchases(userId: String, purchases: List[PurchaseInfo], lowerDate: Float, upperDate: Float)
+case class PurchaseInfo(purchaseId: String)(val time: Date) extends Ordered[PurchaseInfo] {
+  def compare(that: PurchaseInfo): Int = this.time.compareTo(that.time)
+}
+sealed case class PlatformsUserPurchases(userId: String, purchases: List[PurchaseInfo])
+sealed case class PlatformsPurchaseInfo(platform: String, results: List[PlatformsUserPurchases])
+
+
+sealed case class UserPurchases(userId: String, var purchases: List[PurchaseInfo], lowerDate: Date, upperDate: Date)
+case class PurchaseResults(platform: String, results: UserPurchases)
 
 class PayingUsers(
   ctx: SparkContext,
@@ -72,7 +80,7 @@ class PayingUsers(
       try {
         val collection = client.getDB(uri.database.get)(collectionName)
         payingUsers foreach {element =>
-          val pInfo = UserPurchases(element._1, element._2, lowerDate.getTime, upperDate.getTime)
+          val pInfo = UserPurchases(element._1, element._2, lowerDate, upperDate)
           collection.insert(pInfo)
         }
         client.close
@@ -92,7 +100,8 @@ class PayingUsers(
      inputCollection: String,
      outputCollection: String,
      lowerDate: Date,
-     upperDate: Date
+     upperDate: Date,
+     platforms: List[String]
    ): Future[Unit] = {
 
      val promise = Promise[Unit]
@@ -104,49 +113,75 @@ class PayingUsers(
      jobConfig.set("mongo.output.uri", outputUri)
      jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-     val mongoRDD = ctx.newAPIHadoopRDD(
+     val rdd = ctx.newAPIHadoopRDD(
        jobConfig,
        classOf[com.mongodb.hadoop.MongoInputFormat],
        classOf[Object],
        classOf[BSONObject]
-     ).filter((t: Tuple2[Object, BSONObject]) => {
-       def parseFloat(d: String): Option[Long] = {
-         try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
-       }
-       parseFloat(t._2.get("time").toString) match {
-         case Some(dbDate) => {
-           val startDate = new Date(dbDate)
-           startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
+     )
+
+     // Creates an RDD with data of mobile platform
+     val rdds = getRDDPerPlatforms("time", platforms, rdd, lowerDate, upperDate, ctx)
+
+     // Calculates results per platform
+     val platformResults = rdds map {rdd =>
+       if(rdd._2.count() > 0) {
+         val payingUsers = (rdd._2.map(purchases => {
+           def parseDate(d: String): Option[Date] = {
+             try {
+               val Format = "E MMM dd HH:mm:ss Z yyyy"
+               Some(new SimpleDateFormat(Format).parse(d))
+             } catch {case _: Throwable => None }
+           }
+
+           val time = parseDate(purchases._2.get("time").toString)
+           (
+             purchases._2.get("userId").toString,
+             PurchaseInfo(purchases._2.get("id").toString)(time.get)
+           )
+         })).groupByKey.map(purchaseInfo => {
+           new PlatformsUserPurchases(purchaseInfo._1, purchaseInfo._2.toList.sorted)
+         }).collect.toList
+         new PlatformsPurchaseInfo(rdd._1, payingUsers)
+       } else null
+     }
+
+     val totalResults = platformResults.foldLeft(List.empty[UserPurchases]){(lst, elements) => {
+       var buffer: ListBuffer[UserPurchases] = lst.to[ListBuffer]
+       for(userPurchases <- elements.results) {
+         // If user is not on results' array: create it and add all current platform's purchases
+         if(!buffer.exists(_.userId == userPurchases.userId)) {
+           buffer += new UserPurchases(userPurchases.userId, userPurchases.purchases, lowerDate, upperDate)
+         } else {
+           // Add non-duplicated purchases
+           val info = buffer.find(_.userId == userPurchases.userId).get
+           val purchases = (info.purchases ::: userPurchases.purchases).distinct
+           info.purchases = purchases
+           buffer = buffer.filterNot(_.userId == info.userId)
+           buffer += info
          }
-         case _ => false
        }
-     })
+       buffer.toList
+     }}
 
-     if(mongoRDD.count > 0) {
-      val payingUsers = (mongoRDD.map(purchases => {
-        (
-          purchases._2.get("userId").toString,
-          PurchaseInfo(purchases._2.get("id").toString, purchases._2.get("time").toString.toFloat)
-        )
-      })).groupByKey.map(purchaseInfo => {
-        (purchaseInfo._1, purchaseInfo._2.toList.sortWith(_.time < _.time))
-      }).collect.toList
+    //  if(mongoRDD.count > 0) {
+      
 
-       val dbResult = saveResultToDatabase(ThorContext.URI,
-         outputCollection,
-         payingUsers,
-         lowerDate,
-         upperDate
-       )
+    //    val dbResult = saveResultToDatabase(ThorContext.URI,
+    //      outputCollection,
+    //      payingUsers,
+    //      lowerDate,
+    //      upperDate
+    //    )
 
-      dbResult onComplete {
-        case Success(_) => promise.success()
-        case Failure(ex) => promise.failure(ex)
-      }
-    } else {
-      log.error("Count is zero")
-      promise.failure(new Exception)
-    }
+    //   dbResult onComplete {
+    //     case Success(_) => promise.success()
+    //     case Failure(ex) => promise.failure(ex)
+    //   }
+    // } else {
+    //   log.error("Count is zero")
+    //   promise.failure(new Exception)
+    // }
 
     promise.future
   }
@@ -161,7 +196,8 @@ class PayingUsers(
         getCollectionInput(companyName, applicationName),
         getCollectionOutput(companyName, applicationName),
         lowerDate,
-        upperDate
+        upperDate,
+        platforms
       ) map {res =>
         log.info("Job completed successful")
         onJobSuccess(companyName, applicationName, "Paying Users", lowerDate, upperDate)

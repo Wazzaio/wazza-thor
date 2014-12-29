@@ -80,9 +80,7 @@ class TotalRevenue(
 
     // Calculates total results and persist them
     if(!platformResults.exists(_ == null)) {
-      val totalRevenue = platformResults.foldLeft(0.0){(acc, element) =>
-        acc + element.res
-      }
+      val totalRevenue = platformResults.foldLeft(0.0)(_ + _.res)
       val results = new Results(totalRevenue, platformResults, lowerDate, upperDate)
       saveResultToDatabase(ThorContext.URI, outputCollection, results)
       promise.success()
