@@ -32,39 +32,8 @@ class TotalRevenue(
 
   dependants = d
 
-  private case class PlatformResults(platform: String, res: Double)
-  private case class Results(
-    totalRevenue: Double,
-    platforms: List[PlatformResults],
-    lowerDate: Date,
-    upperDate: Date
-  )
-
-  private def resultsToMongo(results: Results): MongoDBObject = {
-    MongoDBObject(
-      "totalRevenue" -> results.totalRevenue,
-      "platforms" -> (results.platforms map {p => MongoDBObject("platform" -> p.platform, "res" -> p.res)}),
-      "lowerDate" -> results.lowerDate,
-      "upperDate" -> results.upperDate
-    )
-  }
-
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "TotalRevenue"
-
-  private def saveResultToDatabase(
-    uriStr: String,
-    collectionName: String,
-    results: Results,
-    companyName: String,
-    applicationName: String
-  ) = {
-    val uri  = MongoClientURI(uriStr)
-    val client = MongoClient(uri)
-    val collection = client.getDB(uri.database.get).getCollection(collectionName)
-    collection.insert(resultsToMongo(results))
-    client.close()
-  }
 
   private def executeJob(
     inputCollection: String,
@@ -92,31 +61,9 @@ class TotalRevenue(
       classOf[Object],
       classOf[BSONObject]
     )
-    val emptyRDD = ctx.emptyRDD
 
     // Creates an RDD with data of mobile platform
-    val rdds = platforms map {p =>
-      val filteredRDD = rdd.filter(t => {
-        def parseDate(d: String): Option[Date] = {
-          try {
-            val Format = "E MMM dd HH:mm:ss Z yyyy"
-            Some(new SimpleDateFormat(Format).parse(d))
-          } catch {case _: Throwable => None }
-        }
-
-        val dateStr = t._2.get("time").toString
-        val t2 = parseDate(dateStr)
-        val time = parseDate(dateStr) match {
-          case Some(startDate) => {
-            startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
-          } 
-          case _ => false
-        }
-        val platform = (Json.parse(t._2.get("device").toString) \ "osType").as[String] == p
-        time && platform
-      })
-      (p, if(filteredRDD.count > 0) rdd else emptyRDD)
-    }
+    val rdds = getRDDPerPlatforms("time", platforms, rdd, lowerDate, upperDate, ctx)
 
     // Calculates results per platform
     val platformResults = rdds map {rdd =>
@@ -137,7 +84,7 @@ class TotalRevenue(
         acc + element.res
       }
       val results = new Results(totalRevenue, platformResults, lowerDate, upperDate)
-      saveResultToDatabase(ThorContext.URI, outputCollection, results, companyName, applicationName)
+      saveResultToDatabase(ThorContext.URI, outputCollection, results)
       promise.success()
     } else {
       log.error("Count is zero")
