@@ -87,14 +87,14 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
       log.info(s"core job ended ${sender.toString}")
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
         executeJob(companyName, applicationName, upper, lower) map { arpu =>
           log.info("Job completed successful")
-          ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper)
+          ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper, platforms)
           onJobSuccess(companyName, applicationName, "Arpu")
         } recover {
           case ex: Exception => onJobFailure(ex, "Arpu")

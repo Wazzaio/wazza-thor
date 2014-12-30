@@ -12,7 +12,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
@@ -113,14 +112,14 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
       log.info(s"core job ended ${sender.toString}")
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
         executeJob(companyName, applicationName, upper, lower) map { arpu =>
           log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, "Average Time Between Purchases")
+          onJobSuccess(companyName, applicationName, "Average Time Between Purchases, platforms")
         } recover {
           case ex: Exception => onJobFailure(ex, "Average Time Between Purchases")
         }

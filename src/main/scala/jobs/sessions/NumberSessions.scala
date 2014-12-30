@@ -92,7 +92,7 @@ class NumberSessions(
         platforms
       ) map {res =>
         log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Number Sessions", lowerDate, upperDate)
+        onJobSuccess(companyName, applicationName, "Number Sessions", lowerDate, upperDate, platforms)
       } recover {
         case ex: Exception => {
           log.error("Job failed")

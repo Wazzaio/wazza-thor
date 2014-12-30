@@ -108,7 +108,7 @@ class TotalRevenue(
         platforms
       ) map {res =>
         log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Total Revenue", lowerDate, upperDate)
+        onJobSuccess(companyName, applicationName, "Total Revenue", lowerDate, upperDate, platforms)
       } recover {
         case ex: Exception => {
           log.error("Job failed")

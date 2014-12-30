@@ -15,8 +15,15 @@ trait CoreJob extends WazzaActor {
   def addDependant(d: ActorRef) = dependants = dependants :+ d
   def kill: Unit
 
-  def onJobSuccess(companyName: String, applicationName: String, jobType: String, lower: Date, upper: Date) = {
-    dependants.foreach{_ ! CoreJobCompleted(companyName, applicationName, jobType, lower, upper)}
+  def onJobSuccess(
+    companyName: String,
+    applicationName: String,
+    jobType: String,
+    lower: Date,
+    upper: Date,
+    platforms: List[String]
+  ) = {
+    dependants.foreach{_ ! CoreJobCompleted(companyName, applicationName, jobType, lower, upper, platforms)}
     jobCompleted = true
   }
 

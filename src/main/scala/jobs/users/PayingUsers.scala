@@ -206,7 +206,7 @@ class PayingUsers(
         platforms
       ) map {res =>
         log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Paying Users", lowerDate, upperDate)
+        onJobSuccess(companyName, applicationName, "Paying Users", lowerDate, upperDate, platforms)
       } recover {
         case ex: Exception => {
           log.error("Job failed")

@@ -11,5 +11,7 @@ case class CoreJobCompleted(
   applicationName: String,
   name: String,
   lower: Date,
-  upper: Date
+  upper: Date,
+  platforms: List[String]
 ) extends JobResult
+
