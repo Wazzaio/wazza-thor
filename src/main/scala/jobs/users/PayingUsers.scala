@@ -12,7 +12,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-//import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.util.{Success,Failure}
 import scala.collection.JavaConversions._
@@ -29,15 +28,22 @@ object PayingUsers {
   def props(ctx: SparkContext, d: List[ActorRef]): Props = Props(new PayingUsers(ctx, d))
 }
 
-case class PurchaseInfo(purchaseId: String)(val time: Date) extends Ordered[PurchaseInfo] {
+case class PlatformPurchases(platform: String, purchases: List[PurchaseInfo])
+
+case class PurchaseInfo(
+  purchaseId: String,
+  val time: Date,
+  platform: Option[String] = None
+) extends Ordered[PurchaseInfo] {
   def compare(that: PurchaseInfo): Int = this.time.compareTo(that.time)
 }
-sealed case class PlatformsUserPurchases(userId: String, purchases: List[PurchaseInfo])
-sealed case class PlatformsPurchaseInfo(platform: String, results: List[PlatformsUserPurchases])
 
-
-sealed case class UserPurchases(userId: String, var purchases: List[PurchaseInfo], lowerDate: Date, upperDate: Date)
-case class PurchaseResults(platform: String, results: UserPurchases)
+sealed case class UserPurchases(
+  userId: String,
+  totalPurchases: List[PurchaseInfo],
+  purchasesPerPlatform: List[PlatformPurchases],
+  lowerDate: Date, upperDate: Date
+)
 
 class PayingUsers(
   ctx: SparkContext,
@@ -53,23 +59,35 @@ class PayingUsers(
   implicit def userPurchaseToBson(u: UserPurchases): DBObject = {
     MongoDBObject(
       "userId" -> u.userId,
-      "purchases" -> (u.purchases map {purchaseInfoToBson(_)}),
+      "purchases" -> (u.totalPurchases map {purchaseInfoToBson(_)}),
+      "purchasesPerPlatform" -> (u.purchasesPerPlatform map {platformPurchaseToBson(_)}),
       "lowerDate" -> u.lowerDate,
       "upperDate" -> u.upperDate
     )
   }
 
-  implicit def purchaseInfoToBson(p: PurchaseInfo): MongoDBObject = {
+  implicit def platformPurchaseToBson(p: PlatformPurchases): MongoDBObject = {
     MongoDBObject(
-      "purchaseId" -> p.purchaseId,
-      "time" -> p.time
+      "platform" -> p.platform,
+      "purchases" -> (p.purchases map {purchaseInfoToBson(_)})
     )
+  }
+
+  implicit def purchaseInfoToBson(p: PurchaseInfo): MongoDBObject = {
+    val builder = MongoDBObject.newBuilder
+    builder += "purchaseId" -> p.purchaseId
+    builder += "time" -> p.time
+    p.platform match {
+      case Some(platform) => builder += "platform" -> platform
+      case None => {}
+    }
+    builder.result
   }
 
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    payingUsers: List[(String, List[PurchaseInfo])],
+    payingUsers: List[UserPurchases],
     lowerDate: Date,
     upperDate: Date
   ): Future[Unit] = {
@@ -79,10 +97,7 @@ class PayingUsers(
       val client = MongoClient(uri)
       try {
         val collection = client.getDB(uri.database.get)(collectionName)
-        payingUsers foreach {element =>
-          val pInfo = UserPurchases(element._1, element._2, lowerDate, upperDate)
-          collection.insert(pInfo)
-        }
+        payingUsers foreach {collection.insert(_)}
         client.close
         promise.success()
       } catch {
@@ -118,71 +133,62 @@ class PayingUsers(
        classOf[com.mongodb.hadoop.MongoInputFormat],
        classOf[Object],
        classOf[BSONObject]
-     )
-
-     // Creates an RDD with data of mobile platform
-     val rdds = getRDDPerPlatforms("time", platforms, rdd, lowerDate, upperDate, ctx)
-
-     // Calculates results per platform
-     val platformResults = rdds map {rdd =>
-       if(rdd._2.count() > 0) {
-         val payingUsers = (rdd._2.map(purchases => {
-           def parseDate(d: String): Option[Date] = {
-             try {
-               val Format = "E MMM dd HH:mm:ss Z yyyy"
-               Some(new SimpleDateFormat(Format).parse(d))
-             } catch {case _: Throwable => None }
-           }
-
-           val time = parseDate(purchases._2.get("time").toString)
-           (
-             purchases._2.get("userId").toString,
-             PurchaseInfo(purchases._2.get("id").toString)(time.get)
-           )
-         })).groupByKey.map(purchaseInfo => {
-           new PlatformsUserPurchases(purchaseInfo._1, purchaseInfo._2.toList.sorted)
-         }).collect.toList
-         new PlatformsPurchaseInfo(rdd._1, payingUsers)
-       } else null
-     }
-
-     val totalResults = platformResults.foldLeft(List.empty[UserPurchases]){(lst, elements) => {
-       var buffer: ListBuffer[UserPurchases] = lst.to[ListBuffer]
-       for(userPurchases <- elements.results) {
-         // If user is not on results' array: create it and add all current platform's purchases
-         if(!buffer.exists(_.userId == userPurchases.userId)) {
-           buffer += new UserPurchases(userPurchases.userId, userPurchases.purchases, lowerDate, upperDate)
-         } else {
-           // Add non-duplicated purchases
-           val info = buffer.find(_.userId == userPurchases.userId).get
-           val purchases = (info.purchases ::: userPurchases.purchases).distinct
-           info.purchases = purchases
-           buffer = buffer.filterNot(_.userId == info.userId)
-           buffer += info
-         }
+     ).filter(t => {
+       def parseDate(d: String): Option[Date] = {
+         try {
+           val Format = "E MMM dd HH:mm:ss Z yyyy"
+           Some(new SimpleDateFormat(Format).parse(d))
+         } catch {case _: Throwable => None }
        }
-       buffer.toList
-     }}
 
-    //  if(mongoRDD.count > 0) {
-      
+       val dateStr = t._2.get("time").toString
+       parseDate(dateStr) match {
+         case Some(startDate) => {
+           startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
+         }
+         case _ => false
+       }
+     })
 
-    //    val dbResult = saveResultToDatabase(ThorContext.URI,
-    //      outputCollection,
-    //      payingUsers,
-    //      lowerDate,
-    //      upperDate
-    //    )
+     if(rdd.count() > 0) {
+       val payingUsers = rdd.map(purchases => {
+         def parseDate(d: String): Option[Date] = {
+           try {
+             val Format = "E MMM dd HH:mm:ss Z yyyy"
+             Some(new SimpleDateFormat(Format).parse(d))
+           } catch {case _: Throwable => None }
+         }
 
-    //   dbResult onComplete {
-    //     case Success(_) => promise.success()
-    //     case Failure(ex) => promise.failure(ex)
-    //   }
-    // } else {
-    //   log.error("Count is zero")
-    //   promise.failure(new Exception)
-    // }
+         val time = parseDate(purchases._2.get("time").toString)
+         val platform = (Json.parse(purchases._2.get("device").toString) \ "osType").as[String]
+         val info = new PurchaseInfo(purchases._2.get("id").toString, time.get, Some(platform))
+         (purchases._2.get("userId").toString, info)
+       }).groupByKey.map(purchaseInfo => {
+         val userId = purchaseInfo._1
+         val purchasesPerPlatform = platforms map {p =>
+           val platformPurchases = purchaseInfo._2.filter(_.platform match {
+             case Some(opt) => opt == p
+             case _ => false
+           }) map {pp =>
+             new PurchaseInfo(pp.purchaseId, pp.time)
+           }
+           new PlatformPurchases(p, platformPurchases.toList)
+         }
 
+         new UserPurchases(userId, purchaseInfo._2.toList, purchasesPerPlatform, lowerDate, upperDate)
+       })
+       val dbResult = saveResultToDatabase(ThorContext.URI,
+         outputCollection,
+         payingUsers.collect.toList,
+         lowerDate,
+         upperDate
+       )
+
+       dbResult onComplete {
+         case Success(_) => promise.success()
+         case Failure(ex) => promise.failure(ex)
+       }
+     }
     promise.future
   }
 

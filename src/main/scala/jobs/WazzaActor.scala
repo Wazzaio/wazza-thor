@@ -43,7 +43,6 @@ trait WazzaActor {
         }
 
         val dateStr = t._2.get(timeField).toString
-        val t2 = parseDate(dateStr)
         val time = parseDate(dateStr) match {
           case Some(startDate) => {
             startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
