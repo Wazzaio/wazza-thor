@@ -22,6 +22,12 @@ object PurchasesPerSession {
   def props(sc: SparkContext): Props = Props(new PurchasesPerSession(sc))
 }
 
+sealed case class PurchasePerPlatform(platform: String, purchases: Int)
+sealed case class PurchasePerUser(userId: String, totalPurchases: Int, platforms: List[PurchasePerPlatform])
+object PurchasePerUser {
+  def apply: PurchasePerUser = new PurchasePerUser(null, 0, List[PurchasePerPlatform]())
+}
+
 class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
   import context._
 
@@ -54,8 +60,9 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
-  ): Double = {
+    end: Date,
+    platforms: List[String]
+  ): PurchasePerUser = {
     val inputUri = s"${ThorContext.URI}.${inputCollection}"
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
@@ -66,7 +73,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter((t: Tuple2[Object, BSONObject]) => {
+    )/**.filter((t: Tuple2[Object, BSONObject]) => {
       def parseFloat(d: String): Option[Long] = {
         try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
       }
@@ -77,17 +84,30 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
         }
         case _ => false
       }
-    })
+    })**/
 
     if(payingUsersRDD.count > 0) {
       val payingUsers = payingUsersRDD map {element =>
-        val purchases = (Json.parse(element._2.get("purchases").toString)).as[JsArray].value.size
-        (element._2.get("userId").toString, purchases)
+        val totalPurchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size
+        val purchasesPerPlatform = platforms map {platform =>
+          val p = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray]
+          val nrPurchases = p.value.filter(el => (el \ "platform").as[String] == platform).size
+          new PurchasePerPlatform(platform, nrPurchases)
+        }
+        new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
       }
-      payingUsers.values.reduce(_+_)
+      println(payingUsers.collect.toList)
+      payingUsers.fold(PurchasePerUser.apply){(res, current) =>
+        val total = res.totalPurchases + current.totalPurchases
+        val purchasesPerPlatforms = platforms map {p =>
+          val updatedPurchases = current.platforms.filter(_.platform == p).size + current.platforms.size
+          new PurchasePerPlatform(p, updatedPurchases) 
+        }
+        new PurchasePerUser(null, total, purchasesPerPlatforms)
+      }
     } else {
       log.error("Count is zero")
-      -1
+      PurchasePerUser.apply
     }
 
   }
@@ -96,48 +116,56 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
-    val dateFields = ("lowerDate", "upperDate")
-    val nrSessionsCollName = s"${companyName}_numberSessions_${applicationName}"
-    val uri = MongoClientURI(ThorContext.URI)
-    val mongoClient = MongoClient(uri)
-    val nrSessionsCollection = mongoClient(uri.database.getOrElse("dev"))(nrSessionsCollName)
-    val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    val nrSessions = nrSessionsCollection.findOne(query).getOrElse(None)
+    val purchases = getNumberPurchases(
+      getCollectionInput(companyName, applicationName),
+      companyName,
+      applicationName,
+      start,
+      end,
+      platforms
+    )
 
-    nrSessions match {
-      case None => {
-        log.error("cannot find elements")
-        promise.failure(new Exception)
-      }
-      case sessions => {
-        val nrSessions = (Json.parse(sessions.toString) \ "totalSessions").as[Int]
-        val nrPurchases = getNumberPurchases(
-          getCollectionInput(companyName, applicationName),
-          companyName,
-          applicationName,
-          start,
-          end
-        )
+    println("PURCHASES!!")
+    println(purchases)
 
-        val result = if(nrSessions > 0 && nrPurchases != -1) nrPurchases / nrSessions else 0
-        saveResultToDatabase(
-          ThorContext.URI,
-          getCollectionOutput(companyName, applicationName),
-          result,
-          start,
-          end,
-          companyName,
-          applicationName
-        )
-        promise.success()
-      }
-    }
+    // val dateFields = ("lowerDate", "upperDate")
+    // val nrSessionsCollName = s"${companyName}_numberSessions_${applicationName}"
+    // val uri = MongoClientURI(ThorContext.URI)
+    // val mongoClient = MongoClient(uri)
+    // val nrSessionsCollection = mongoClient(uri.database.getOrElse("dev"))(nrSessionsCollName)
+    // val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
+    // val nrSessions = nrSessionsCollection.findOne(query).getOrElse(None)
 
-    mongoClient.close
+
+    // nrSessions match {
+    //   case None => {
+    //     log.error("cannot find elements")
+    //     promise.failure(new Exception)
+    //   }
+    //   case sessions => {
+    //     val nrSessions = (Json.parse(sessions.toString) \ "totalSessions").as[Int]
+
+
+    //     val result = if(nrSessions > 0 && nrPurchases != -1) nrPurchases / nrSessions else 0
+    //     saveResultToDatabase(
+    //       ThorContext.URI,
+    //       getCollectionOutput(companyName, applicationName),
+    //       result,
+    //       start,
+    //       end,
+    //       companyName,
+    //       applicationName
+    //     )
+    //     promise.success()
+    //   }
+    // }
+
+    //mongoClient.close
     promise.future
   }
 
@@ -149,7 +177,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, upper, lower) map { arpu =>
+        executeJob(companyName, applicationName, upper, lower, platforms) map { arpu =>
           log.info("Job completed successful")
           onJobSuccess(companyName, applicationName, "Average Purchases Per Session")
         } recover {
