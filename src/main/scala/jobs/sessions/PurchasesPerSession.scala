@@ -4,6 +4,7 @@ import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
+import scala.collection.mutable.ListBuffer
 import scala.util.Try
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
@@ -96,15 +97,24 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
         }
         new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
       }
-      println(payingUsers.collect.toList)
-      payingUsers.fold(PurchasePerUser.apply){(res, current) =>
+      val x = payingUsers.reduce{(res, current) => 
         val total = res.totalPurchases + current.totalPurchases
-        val purchasesPerPlatforms = platforms map {p =>
-          val updatedPurchases = current.platforms.filter(_.platform == p).size + current.platforms.size
-          new PurchasePerPlatform(p, updatedPurchases) 
+        val purchasesPerPlatforms: ListBuffer[PurchasePerPlatform] = new ListBuffer[PurchasePerPlatform]()
+        platforms foreach {p =>
+          println("platform: " + p)
+          def purchaseCalculator(platforms: List[PurchasePerPlatform]) = {
+            platforms.filter(_.platform == p).size
+          }
+          println("CURRENT: " + current.platforms + " | count: " + purchaseCalculator(current.platforms))
+          println("ACCUM: " + res.platforms + " | count: " + purchaseCalculator(res.platforms))
+          val updatedPurchases = purchaseCalculator(current.platforms) + purchaseCalculator(res.platforms)
+          purchasesPerPlatforms += new PurchasePerPlatform(p, updatedPurchases)
         }
-        new PurchasePerUser(null, total, purchasesPerPlatforms)
+        println("TOTAL PURCHASES: " + purchasesPerPlatforms + "\n")
+        new PurchasePerUser(null, total, purchasesPerPlatforms.toList)
       }
+      println("RESULT: " + x)
+      x
     } else {
       log.error("Count is zero")
       PurchasePerUser.apply
@@ -120,6 +130,8 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
+
+    println("PLATFORMS: " + platforms)
 
     val purchases = getNumberPurchases(
       getCollectionInput(companyName, applicationName),
