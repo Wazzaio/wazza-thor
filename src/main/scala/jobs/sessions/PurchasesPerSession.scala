@@ -92,29 +92,26 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
         val totalPurchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size
         val purchasesPerPlatform = platforms map {platform =>
           val p = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray]
-          val nrPurchases = p.value.filter(el => (el \ "platform").as[String] == platform).size
+          val nrPurchases = p.value.find(el => (el \ "platform").as[String] == platform) match {
+            case Some(platformPurchases) => (platformPurchases \ "purchases").as[JsArray].value.size
+            case _ => 0
+          }
           new PurchasePerPlatform(platform, nrPurchases)
         }
         new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
       }
-      val x = payingUsers.reduce{(res, current) => 
+      payingUsers.reduce{(res, current) => 
         val total = res.totalPurchases + current.totalPurchases
-        val purchasesPerPlatforms: ListBuffer[PurchasePerPlatform] = new ListBuffer[PurchasePerPlatform]()
-        platforms foreach {p =>
-          println("platform: " + p)
-          def purchaseCalculator(platforms: List[PurchasePerPlatform]) = {
-            platforms.filter(_.platform == p).size
+        var purchasesPerPlatforms = platforms map {p =>
+          def purchaseCalculator(pps: List[PurchasePerPlatform]) = {
+            pps.find(_.platform == p).get.purchases
           }
-          println("CURRENT: " + current.platforms + " | count: " + purchaseCalculator(current.platforms))
-          println("ACCUM: " + res.platforms + " | count: " + purchaseCalculator(res.platforms))
           val updatedPurchases = purchaseCalculator(current.platforms) + purchaseCalculator(res.platforms)
-          purchasesPerPlatforms += new PurchasePerPlatform(p, updatedPurchases)
+          val result = new PurchasePerPlatform(p, updatedPurchases)
+          result
         }
-        println("TOTAL PURCHASES: " + purchasesPerPlatforms + "\n")
         new PurchasePerUser(null, total, purchasesPerPlatforms.toList)
       }
-      println("RESULT: " + x)
-      x
     } else {
       log.error("Count is zero")
       PurchasePerUser.apply
@@ -131,8 +128,6 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
-    println("PLATFORMS: " + platforms)
-
     val purchases = getNumberPurchases(
       getCollectionInput(companyName, applicationName),
       companyName,
@@ -142,8 +137,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       platforms
     )
 
-    println("PURCHASES!!")
-    println(purchases)
+    println("PURCHASES: " + purchases)
 
     // val dateFields = ("lowerDate", "upperDate")
     // val nrSessionsCollName = s"${companyName}_numberSessions_${applicationName}"
