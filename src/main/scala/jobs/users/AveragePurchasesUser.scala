@@ -24,16 +24,27 @@ object AveragePurchasesUser {
   def props(sc: SparkContext): Props = Props(new AveragePurchasesUser(sc))
 }
 
+sealed case class AveragePurchaseUserPerPlatform(platform: String, value: Double)
+sealed case class AveragePurchaseUser(total: Double, platforms: List[AveragePurchaseUserPerPlatform])
+
 class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
   import context._
 
   def inputCollectionType: String = "payingUsers"
   def outputCollectionType: String = "avgPurchasesUser"
 
+  private def averagePurchaseUserPerPlatformToBson(p: AveragePurchaseUserPerPlatform): MongoDBObject = {
+    MongoDBObject("platform" -> p.platform, "value" -> p.value)
+  }
+
+  private def averagePurchaseUserToBson(p: AveragePurchaseUser): MongoDBObject = {
+    MongoDBObject("total" -> p.total, "platforms" -> p.platforms.map{averagePurchaseUserPerPlatformToBson(_)})
+  }
+
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    result: Double,
+    result: AveragePurchaseUser,
     end: Date,
     start: Date,
     companyName: String,
@@ -43,9 +54,9 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val obj = MongoDBObject(
-      "avgPurchasesUser" -> result,
-      "lowerDate" -> start.getTime,
-      "upperDate" -> end.getTime
+      "avgPurchasesUser" -> averagePurchaseUserToBson(result),
+      "lowerDate" -> start,
+      "upperDate" -> end
     )
     collection.insert(obj)
     client.close
@@ -57,7 +68,8 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
@@ -71,7 +83,7 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter((t: Tuple2[Object, BSONObject]) => {
+    )/**.filter((t: Tuple2[Object, BSONObject]) => {
       def parseFloat(d: String): Option[Long] = {
         try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
       }
@@ -82,17 +94,41 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
         }
         case _ => false
       }
-    })
+    })**/
 
     if(payingUsersRDD.count > 0) {
       val payingUsers = payingUsersRDD map {element =>
-        val purchases = (Json.parse(element._2.get("purchases").toString)).as[JsArray].value.size
-        (element._2.get("userId").toString, purchases)
+        val totalPurchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size
+        val purchasesPerPlatform = platforms map {platform =>
+          val p = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray]
+          val nrPurchases = p.value.find(el => (el \ "platform").as[String] == platform) match {
+            case Some(platformPurchases) => (platformPurchases \ "purchases").as[JsArray].value.size
+            case _ => 0
+          }
+          new PurchasePerPlatform(platform, nrPurchases)
+        }
+        new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
       }
 
-      val nrUsers = payingUsers.keys.count
-      val nrPurchases = payingUsers.values.reduce(_+_)
-      val result = if(nrUsers > 0) nrPurchases / nrUsers else 0
+      val purchases = payingUsers.reduce{(res, current) =>
+        val total = res.totalPurchases + current.totalPurchases
+        val purchasesPerPlatforms = platforms map {p =>
+          def purchaseCalculator(pps: List[PurchasePerPlatform]) = {
+            pps.find(_.platform == p).get.purchases
+          }
+          val updatedPurchases = purchaseCalculator(current.platforms) + purchaseCalculator(res.platforms)
+          val result = new PurchasePerPlatform(p, updatedPurchases)
+          result
+        }
+        new PurchasePerUser(null, total, purchasesPerPlatforms.toList)
+      }
+
+      val nrUsers = payingUsers.count
+      val result = new AveragePurchaseUser(
+        purchases.totalPurchases / nrUsers,
+        purchases.platforms.map{p =>new AveragePurchaseUserPerPlatform(p.platform, p.purchases / nrUsers)}
+      )
+
       saveResultToDatabase(
         ThorContext.URI,
         getCollectionOutput(companyName, applicationName),
@@ -126,7 +162,8 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
           companyName,
           applicationName,
           upper,
-          lower
+          lower,
+          platforms
         ) map { arpu =>
           log.info("Job completed successful")
           onJobSuccess(companyName, applicationName, "Average Revenue Per Session")
