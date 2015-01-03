@@ -23,17 +23,20 @@ object PurchasesPerSession {
   def props(sc: SparkContext): Props = Props(new PurchasesPerSession(sc))
 }
 
-sealed case class PurchasePerPlatform(platform: String, purchases: Int)
-sealed case class PurchasePerUser(userId: String, totalPurchases: Int, platforms: List[PurchasePerPlatform])
+sealed case class PurchasePerPlatform(platform: String, purchases: Double)
+sealed case class PurchasePerUser(userId: String, totalPurchases: Double, platforms: List[PurchasePerPlatform])
 object PurchasePerUser {
   def apply: PurchasePerUser = new PurchasePerUser(null, 0, List[PurchasePerPlatform]())
 }
 
-sealed case class SessionsPerPlatform(platform: String, sessions: Int)
-sealed case class NrSessions(total: Int, platforms: List[SessionsPerPlatform])
+sealed case class SessionsPerPlatform(platform: String, sessions: Double)
+sealed case class NrSessions(total: Double, platforms: List[SessionsPerPlatform])
 object NrSessions {
   def apply: NrSessions = new NrSessions(0, List[SessionsPerPlatform]())
 }
+
+sealed case class PurchasesPerSessionPerPlatform(platform: String, value: Double)
+sealed case class PurchasesPerSessionResult(total: Double, platforms: List[PurchasesPerSessionPerPlatform])
 
 class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
   import context._
@@ -41,10 +44,18 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
   def inputCollectionType: String = "payingUsers"
   def outputCollectionType: String = "PurchasesPerSession"
 
+  private implicit def PurchasesPerSessionPerPlatformToBson(p: PurchasesPerSessionPerPlatform): MongoDBObject = {
+    MongoDBObject("platform" -> p.platform, "value" -> p.value)
+  }
+
+  private implicit def PurchasesPerSessionResultToBson(p: PurchasesPerSessionResult): MongoDBObject = {
+    MongoDBObject("total" -> p.total, "platforms" -> p.platforms.map(PurchasesPerSessionPerPlatformToBson(_)))
+  }
+
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    result: Double,
+    result: PurchasesPerSessionResult,
     end: Date,
     start: Date,
     companyName: String,
@@ -54,9 +65,9 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val obj = MongoDBObject(
-      "avgPurchasesSession" -> result,
-      "lowerDate" -> start.getTime,
-      "upperDate" -> end.getTime
+      "avgPurchasesSession" -> PurchasesPerSessionResultToBson(result),
+      "lowerDate" -> start,
+      "upperDate" -> end
     )
     collection.insert(obj)
     client.close
@@ -139,11 +150,11 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
 
     if(sessionsRDD.count > 0) {
       val nrSessions = sessionsRDD map {element =>
-        val totalSessions = Json.parse(element._2.get("result").toString).as[Int]
+        val totalSessions = Json.parse(element._2.get("result").toString).as[Double]
         val sessionsPerPlatform = platforms map {platform =>
           val p = Json.parse(element._2.get("platforms").toString).as[JsArray]
           val nrSessions = p.value.find(el => (el \ "platform").as[String] == platform) match {
-            case Some(s) => (s \ "res").as[Int]
+            case Some(s) => (s \ "res").as[Double]
             case _ => 0
           }
           new SessionsPerPlatform(platform, nrSessions)
@@ -187,31 +198,31 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     )
     val nrSessions = getNumberSessions(s"${companyName}_numberSessions_${applicationName}", start, end, platforms)
 
-    println("NR SESSIONS: " + nrSessions)
-    // nrSessions match {
-    //   case None => {
-    //     log.error("cannot find elements")
-    //     promise.failure(new Exception)
-    //   }
-    //   case sessions => {
-    //     val nrSessions = (Json.parse(sessions.toString) \ "totalSessions").as[Int]
+    val totalResult = if(nrSessions.total > 0) purchases.totalPurchases / nrSessions.total else 0
 
+    val zippedPlatforms = {
+      val purchasesPerPlatform = purchases.platforms.sortWith{(a,b) => {
+        (a.platform compareToIgnoreCase b.platform) < 0
+      }}
+      val sessionsPerPlatform = nrSessions.platforms.sortWith{(a,b) => {
+        (a.platform compareToIgnoreCase b.platform) < 0
+      }}
+      purchasesPerPlatform zip sessionsPerPlatform
+    }
 
-    //     val result = if(nrSessions > 0 && nrPurchases != -1) nrPurchases / nrSessions else 0
-    //     saveResultToDatabase(
-    //       ThorContext.URI,
-    //       getCollectionOutput(companyName, applicationName),
-    //       result,
-    //       start,
-    //       end,
-    //       companyName,
-    //       applicationName
-    //     )
-    //     promise.success()
-    //   }
-    // }
+    val resultPlatforms = zippedPlatforms.foldLeft(List[PurchasesPerSessionPerPlatform]()){(res, current) => {
+      val result = if(current._2.sessions > 0) current._1.purchases / current._2.sessions else 0
+      res :+ new PurchasesPerSessionPerPlatform(current._1.platform, result)
+    }}
 
-    //mongoClient.close
+    saveResultToDatabase(
+      ThorContext.URI,
+      getCollectionOutput(companyName, applicationName),
+      new PurchasesPerSessionResult(totalResult, resultPlatforms),
+      end,
+      start,
+      companyName, applicationName
+    )
     promise.future
   }
 
