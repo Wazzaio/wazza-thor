@@ -29,6 +29,12 @@ object PurchasePerUser {
   def apply: PurchasePerUser = new PurchasePerUser(null, 0, List[PurchasePerPlatform]())
 }
 
+sealed case class SessionsPerPlatform(platform: String, sessions: Int)
+sealed case class NrSessions(total: Int, platforms: List[SessionsPerPlatform])
+object NrSessions {
+  def apply: NrSessions = new NrSessions(0, List[SessionsPerPlatform]())
+}
+
 class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
   import context._
 
@@ -102,7 +108,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       }
       payingUsers.reduce{(res, current) => 
         val total = res.totalPurchases + current.totalPurchases
-        var purchasesPerPlatforms = platforms map {p =>
+        val purchasesPerPlatforms = platforms map {p =>
           def purchaseCalculator(pps: List[PurchasePerPlatform]) = {
             pps.find(_.platform == p).get.purchases
           }
@@ -116,7 +122,50 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       log.error("Count is zero")
       PurchasePerUser.apply
     }
+  }
 
+  private def getNumberSessions(collection: String, start: Date, end: Date, platforms: List[String]): NrSessions = {
+    val inputUri = s"${ThorContext.URI}.${collection}"
+    val jobConfig = new Configuration
+    jobConfig.set("mongo.input.uri", inputUri)
+    jobConfig.set("mongo.input.split.create_input_splits", "false")
+
+    val sessionsRDD = sc.newAPIHadoopRDD(
+      jobConfig,
+      classOf[com.mongodb.hadoop.MongoInputFormat],
+      classOf[Object],
+      classOf[BSONObject]
+    )//TODO TIME FILTER
+
+    if(sessionsRDD.count > 0) {
+      val nrSessions = sessionsRDD map {element =>
+        val totalSessions = Json.parse(element._2.get("result").toString).as[Int]
+        val sessionsPerPlatform = platforms map {platform =>
+          val p = Json.parse(element._2.get("platforms").toString).as[JsArray]
+          val nrSessions = p.value.find(el => (el \ "platform").as[String] == platform) match {
+            case Some(s) => (s \ "res").as[Int]
+            case _ => 0
+          }
+          new SessionsPerPlatform(platform, nrSessions)
+        }
+        new NrSessions(totalSessions, sessionsPerPlatform)
+      }
+
+      nrSessions.reduce{(res, current) => {
+        val totalSessions = res.total + current.total
+        val sessionsPerPlatforms = platforms map {p =>
+          def sessionCalculator(pps: List[SessionsPerPlatform]) = {
+            pps.find(_.platform == p).get.sessions
+          }
+          val updatedPurchases = sessionCalculator(current.platforms) + sessionCalculator(res.platforms)
+          new SessionsPerPlatform(p, updatedPurchases)
+        }
+        new NrSessions(totalSessions, sessionsPerPlatforms)
+      }}
+    } else {
+      log.error("empty session collection")
+      NrSessions.apply
+    }
   }
 
   def executeJob(
@@ -136,18 +185,9 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       end,
       platforms
     )
+    val nrSessions = getNumberSessions(s"${companyName}_numberSessions_${applicationName}", start, end, platforms)
 
-    println("PURCHASES: " + purchases)
-
-    // val dateFields = ("lowerDate", "upperDate")
-    // val nrSessionsCollName = s"${companyName}_numberSessions_${applicationName}"
-    // val uri = MongoClientURI(ThorContext.URI)
-    // val mongoClient = MongoClient(uri)
-    // val nrSessionsCollection = mongoClient(uri.database.getOrElse("dev"))(nrSessionsCollName)
-    // val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    // val nrSessions = nrSessionsCollection.findOne(query).getOrElse(None)
-
-
+    println("NR SESSIONS: " + nrSessions)
     // nrSessions match {
     //   case None => {
     //     log.error("cannot find elements")
