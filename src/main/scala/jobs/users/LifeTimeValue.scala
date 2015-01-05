@@ -23,8 +23,38 @@ import org.joda.time.LocalDate
 object LifeTimeValue {
   def props(sc: SparkContext): Props = Props(new LifeTimeValue(sc))
 }
+sealed case class NrSessionsUserPlatformData(total: Double, platform: String)
+sealed case class NrSessionsPerUserData(nrUsers: Double, total: Double, platforms: List[NrSessionsUserPlatformData])
+object NrSessionsPerUserData {
+  def apply: NrSessionsPerUserData = new NrSessionsPerUserData(0, 0, List[NrSessionsUserPlatformData]())
+}
 
-class LifeTimeValue(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
+sealed case class LifeTimeValuePlatformsResult(value: Double, platform: String)
+object LifeTimeValuePlatformsResult {
+
+  implicit def toBSON(ltv: LifeTimeValuePlatformsResult): MongoDBObject = {
+    MongoDBObject("value" -> ltv.value, "platform" -> ltv.platform)
+  }
+
+  implicit def toListBSON(lst: List[LifeTimeValuePlatformsResult]): List[MongoDBObject] = {
+    lst.map(toBSON(_))
+  }
+}
+
+sealed case class LifeTimeValueResult(total: Double, platforms: List[LifeTimeValuePlatformsResult])
+object LifeTimeValueResult {
+
+  implicit def toBSON(ltv: LifeTimeValueResult): MongoDBObject = {
+    MongoDBObject("total" -> ltv.total, "platforms" -> LifeTimeValuePlatformsResult.toListBSON(ltv.platforms))
+  }
+
+  def default(platforms: List[String]): LifeTimeValueResult = {
+    new LifeTimeValueResult(0, platforms map {new LifeTimeValuePlatformsResult(0,_)})
+  }
+  
+}
+
+class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with ChildJob {
   import context._
 
   private val ProfitMargin = 0.70
@@ -34,78 +64,159 @@ class LifeTimeValue(sc: SparkContext) extends Actor with ActorLogging  with Chil
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    result: Double,
+    result: LifeTimeValueResult,
     end: Date,
-    start: Date,
-    companyName: String,
-    applicationName: String
+    start: Date
   ) = {
     val uri  = MongoClientURI(uriStr)
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val obj = MongoDBObject(
-      "lifeTimeValue" -> result,
-      "lowerDate" -> start.getTime,
-      "upperDate" -> end.getTime
+      "lifeTimeValue" -> LifeTimeValueResult.toBSON(result),
+      "lowerDate" -> start,
+      "upperDate" -> end
     )
     collection.insert(obj)
     client.close
+  }
+
+  private def getARPU(
+    companyName: String,
+    applicationName: String,
+    start: Date,
+    end: Date,
+    platforms: List[String]
+  ): Option[JsValue] = {
+    val collection = s"${companyName}_Arpu_${applicationName}"
+    val uri = ThorContext.URI
+    val inputUri = s"${uri}.${collection}"
+    val jobConfig = new Configuration
+    jobConfig.set("mongo.input.uri", inputUri)
+    jobConfig.set("mongo.input.split.create_input_splits", "false")
+
+    val arpuRDD = ctx.newAPIHadoopRDD(
+      jobConfig,
+      classOf[com.mongodb.hadoop.MongoInputFormat],
+      classOf[Object],
+      classOf[BSONObject]
+    )//TODO .filter
+      
+    if(arpuRDD.count > 0) {
+      Some(arpuRDD.map{t => Json.parse(t._2.toString)}.collect.toList.head)
+    } else {
+      log.info("No ARPU values found")
+      None
+    }
+  }
+
+  private def getNumberSessionsPerUser(
+    companyName: String,
+    applicationName: String,
+    start: Date,
+    end: Date,
+    platforms: List[String]
+  ): Option[NrSessionsPerUserData] = {
+    val collection = s"${companyName}_numberSessionsPerUser_${applicationName}"
+    val uri = ThorContext.URI
+    val inputUri = s"${uri}.${collection}"
+    val jobConfig = new Configuration
+    jobConfig.set("mongo.input.uri", inputUri)
+    jobConfig.set("mongo.input.split.create_input_splits", "false")
+
+    val nrSessionsPerUserRDD = ctx.newAPIHadoopRDD(
+      jobConfig,
+      classOf[com.mongodb.hadoop.MongoInputFormat],
+      classOf[Object],
+      classOf[BSONObject]
+    )//TODO .filter
+    
+    if(nrSessionsPerUserRDD.count > 0) {
+      val result = nrSessionsPerUserRDD.map{t =>
+        val nrSessionsUserList = Json.parse(t._2.get("nrSessionsPerUser").toString).as[JsArray].value
+        nrSessionsUserList.foldLeft(NrSessionsPerUserData.apply){(res, current) => {
+          val total = res.total + (current \ "total").as[Double]
+          val nrUsers = res.nrUsers +1
+          val platformResults = platforms map {platform =>
+            val elementPlatforms = (current \ "platforms").as[JsArray].value
+            val platformSessionsPerUser = elementPlatforms.find(e => (e \ "platform").as[String] == platform) match {
+              case Some(value) => (value \ "sessions").as[Double]
+              case None => 0
+            }
+            res.platforms.find(_.platform == platform) match {
+              case Some(oldPlatformResults) => {
+                new NrSessionsUserPlatformData(platformSessionsPerUser + oldPlatformResults.total, platform)
+              }
+              case None => new NrSessionsUserPlatformData(platformSessionsPerUser, platform)
+            }
+          }
+          new NrSessionsPerUserData(nrUsers, total, platformResults)
+        }}
+      }.reduce{(res, current) =>
+        val nrUsers = res.nrUsers + current.nrUsers
+        val total = res.total + current.total
+        val platformResults = platforms map {platform =>
+          val resPlatform = res.platforms.find(_.platform == platform).get.total
+          val currentPlatform = current.platforms.find(_.platform == platform).get.total
+          new NrSessionsUserPlatformData(resPlatform + currentPlatform, platform)
+        }
+        new NrSessionsPerUserData(nrUsers, total, platformResults)
+      }
+      Some(result)
+    } else {
+      log.info("No Number of Sessions Per User values found")
+      None
+    }
   }
 
   def executeJob(
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
-    def getNumberSecondsBetweenDates(d1: Date, d2: Date): Float = {
-      (new LocalDate(d2).toDateTimeAtCurrentTime.getMillis - new LocalDate(d1).toDateTimeAtCurrentTime().getMillis) / 1000
-    }
+    val optARPU = getARPU(companyName, applicationName, start, end, platforms)
+    val optNrSessionsUser = getNumberSessionsPerUser(companyName, applicationName, start, end, platforms)
 
-    val dateFields = ("lowerDate", "upperDate")
-    val arpuCollName = s"${companyName}_Arpu_${applicationName}"
-    val nrSessionsUserCollName = s"${companyName}_numberSessionsPerUser_${applicationName}"
-    val uri = MongoClientURI(ThorContext.URI)
-    val mongoClient = MongoClient(uri)
-    val arpuCollection = mongoClient(uri.database.getOrElse("dev"))(arpuCollName)
-    val nrSessionsUserCollection = mongoClient(uri.database.getOrElse("dev"))(nrSessionsUserCollName)
+    // TODO - missing user retention rate
+    // val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
+    val result = (optARPU, optNrSessionsUser) match {
+      case (Some(arpuJson), Some(nrSessionsUser)) => {
+        val arpu = (arpuJson \ "result").as[Double]
+        val arpuPlatformResults = (arpuJson \ "platforms").as[JsArray].value
+        val arpuPerPlatform = platforms map {platform =>
+          val value = arpuPlatformResults.find(e => (e \ "platform").as[String] == platform) match {
+            case Some(data) => (data \ "res").as[Double]
+            case None => 0
+          }
+          (platform, value)
+        }
 
-    val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    val arpuOpt = arpuCollection.findOne(query).getOrElse(None)
-    val nrSessionsUserOpt = nrSessionsUserCollection.findOne(query).getOrElse(None)
+        val totalLTV = arpu * nrSessionsUser.total * ProfitMargin
+        val platformsLTV = (arpuPerPlatform zip nrSessionsUser.platforms) map {element =>
+          val arpu = element._1._2
+          val nrSessions = element._2.total
+          new LifeTimeValuePlatformsResult(arpu * nrSessions * ProfitMargin, element._1._1)
+        }
 
-    (arpuOpt, nrSessionsUserOpt) match {
-      case (None,_) | (_,None) | (None,None) => {
-        log.error("One of the collections is empty")
-        promise.failure(new Exception)
+        new LifeTimeValueResult(totalLTV, platformsLTV)
       }
-      case (arpu, nrSessionsUser) => {
-        val arpuValue = (Json.parse(arpu.toString) \ "arpu").as[Double]
-        val nrSessionsuserlst = (Json.parse(nrSessionsUser.toString) \ "nrSessionsPerUser").as[JsArray].value
-        val nrUsers = nrSessionsuserlst.size
-        val nrSessions = nrSessionsuserlst.foldLeft(0.0)((acc, el) => {
-          acc + (el \ "nrSessions").as[Int]
-        })
-        log.info("number sessions " + nrSessions + " | nr users " + nrUsers)
-        val avgSessionsUser = if(nrUsers > 0) nrSessions / nrUsers else 0
-        //TODO - missing user retention rate
-        val ltv = arpuValue * avgSessionsUser * ProfitMargin
-        saveResultToDatabase(
-          ThorContext.URI,
-          getCollectionOutput(companyName, applicationName),
-          ltv,
-          start,
-          end,
-          companyName,
-          applicationName
-        )
-        promise.success()
-      } 
+      case _ => {
+        log.info("Default value for LTV")
+        LifeTimeValueResult.default(platforms)
+      }
     }
 
-    mongoClient.close
+    saveResultToDatabase(
+      ThorContext.URI,
+      getCollectionOutput(companyName, applicationName),
+      result,
+      end,
+      start
+    )
+
     promise.future
   }
 
@@ -117,7 +228,7 @@ class LifeTimeValue(sc: SparkContext) extends Actor with ActorLogging  with Chil
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, upper, lower) map { arpu =>
+        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
           log.info("Job completed successful")
           onJobSuccess(companyName, applicationName, "LTV")
         } recover {
