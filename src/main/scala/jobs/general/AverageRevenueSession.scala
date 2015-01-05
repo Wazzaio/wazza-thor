@@ -71,7 +71,7 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, upper, lower, platforms) map { arpu =>
+        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
           log.info("Job completed successful")
           onJobSuccess(companyName, applicationName, "Average Revenue Per Session")
         } recover {
