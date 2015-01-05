@@ -28,27 +28,6 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "Arpu"
 
-  private def saveResultToDatabase(
-    uriStr: String,
-    collectionName: String,
-    arpu: Double,
-    end: Date,
-    start: Date,
-    companyName: String,
-    applicationName: String
-  ) = {
-    val uri  = MongoClientURI(uriStr)
-    val client = MongoClient(uri)
-    val collection = client.getDB(uri.database.get)(collectionName)
-    val obj = MongoDBObject(
-      "arpu" -> arpu,
-      "lowerDate" -> start.getTime,
-      "upperDate" -> end.getTime
-    )
-    collection.insert(obj)
-    client.close
-  }
-
   def executeJob(
     companyName: String,
     applicationName: String,
@@ -92,7 +71,7 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, upper, lower) map { arpu =>
+        executeJob(companyName, applicationName, lower, upper) map { arpu =>
           log.info("Job completed successful")
           ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper, platforms)
           onJobSuccess(companyName, applicationName, "Arpu")

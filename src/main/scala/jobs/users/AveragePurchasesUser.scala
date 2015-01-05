@@ -45,8 +45,8 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
     uriStr: String,
     collectionName: String,
     result: AveragePurchaseUser,
-    end: Date,
     start: Date,
+    end: Date,
     companyName: String,
     applicationName: String
   ) = {
@@ -161,8 +161,8 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
           getCollectionOutput(companyName, applicationName),
           companyName,
           applicationName,
-          upper,
           lower,
+          upper,
           platforms
         ) map { arpu =>
           log.info("Job completed successful")
