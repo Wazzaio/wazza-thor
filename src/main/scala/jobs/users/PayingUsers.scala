@@ -92,10 +92,15 @@ class PayingUsers(
   override def outputCollectionType: String = "payingUsers"
 
   implicit def userPurchaseToBson(u: UserPurchases): DBObject = {
+    val purchasesPerPlatform = if(u.purchasesPerPlatform.isEmpty) {
+      List()
+    } else 
+      u.purchasesPerPlatform map {platformPurchaseToBson(_)}
+    
     MongoDBObject(
       "userId" -> u.userId,
       "purchases" -> (u.totalPurchases map {purchaseInfoToBson(_)}),
-      "purchasesPerPlatform" -> (u.purchasesPerPlatform map {platformPurchaseToBson(_)}),
+      "purchasesPerPlatform" -> purchasesPerPlatform,
       "lowerDate" -> u.lowerDate,
       "upperDate" -> u.upperDate
     )
@@ -132,7 +137,7 @@ class PayingUsers(
       val client = MongoClient(uri)
       try {
         val collection = client.getDB(uri.database.get)(collectionName)
-        payingUsers foreach {collection.insert(_)}
+        payingUsers foreach {e => collection.insert(userPurchaseToBson(e))}
         client.close
         promise.success()
       } catch {

@@ -111,23 +111,18 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val payingUsersRDD = sc.newAPIHadoopRDD(
-      jobConfig,
-      classOf[com.mongodb.hadoop.MongoInputFormat],
-      classOf[Object],
-      classOf[BSONObject]
-    )/**.filter((t: Tuple2[Object, BSONObject]) => {
-      def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
-      }
-      parseFloat(t._2.get("lowerDate").toString) match {
-        case Some(dbDate) => {
-          val startDate = new Date(dbDate)
-          startDate.compareTo(start) * end.compareTo(startDate) >= 0
-        }
-        case _ => false
-      }
-    })**/
+    val payingUsersRDD = filterRDDByDateFields(
+      ("lowerDate", "upperDate"),
+      sc.newAPIHadoopRDD(
+        jobConfig,
+        classOf[com.mongodb.hadoop.MongoInputFormat],
+        classOf[Object],
+        classOf[BSONObject]
+      ),
+      start,
+      end,
+      sc
+    )
 
     val result = if(payingUsersRDD.count > 0) {
       val payingUsers = AveragePurchasesUser.mapRDD(payingUsersRDD)
