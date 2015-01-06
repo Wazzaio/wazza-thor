@@ -180,12 +180,18 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val sessionsRDD = sc.newAPIHadoopRDD(
-      jobConfig,
-      classOf[com.mongodb.hadoop.MongoInputFormat],
-      classOf[Object],
-      classOf[BSONObject]
-    )//TODO TIME FILTER
+    val sessionsRDD = filterRDDByDateFields(
+      ("lowerDate", "upperDate"),
+      sc.newAPIHadoopRDD(
+        jobConfig,
+        classOf[com.mongodb.hadoop.MongoInputFormat],
+        classOf[Object],
+        classOf[BSONObject]
+      ),
+      start,
+      end,
+      sc
+    )
 
     if(sessionsRDD.count > 0) {
       PurchasesPerSession.reduceSessions(

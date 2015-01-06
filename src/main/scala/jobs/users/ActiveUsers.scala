@@ -86,18 +86,12 @@ class ActiveUsers(
         }}.groupByKey.count
         new PlatformResults(rdd._1, activeUsers)
       } else {
-        null
+        new PlatformResults(rdd._1, 0.0)
       }
     }
 
-    val results = if(!platforms.exists(_ == null)) {
-      val activeUsers = platformResults.foldLeft(0.0)(_ + _.res)
-      new Results(activeUsers, platformResults, lowerDate, upperDate)
-    } else {
-      log.info("One of collections is empty")
-      new Results(0.0, platforms map {new PlatformResults(_, 0.0)}, lowerDate, upperDate)
-    }
-
+    val activeUsers = platformResults.foldLeft(0.0)(_ + _.res)
+    val results = new Results(activeUsers, platformResults, lowerDate, upperDate)
     saveResultToDatabase(ThorContext.URI, outputCollection, results)
     promise.success()
     promise.future

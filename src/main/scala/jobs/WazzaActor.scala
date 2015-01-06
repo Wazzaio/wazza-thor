@@ -14,6 +14,11 @@ import scala.collection.immutable.StringOps
 
 trait WazzaActor {
 
+  //Messages
+  trait WazzaMessage
+  case class InputCollection(companyName: String, applicationName: String) extends WazzaMessage
+  case class OutputCollection(companyName: String, applicationName: String) extends WazzaMessage
+
   protected var supervisor: ActorRef = null
 
   def inputCollectionType: String
@@ -52,8 +57,38 @@ trait WazzaActor {
         val platform = (Json.parse(t._2.get("device").toString) \ "osType").as[String] == p
         time && platform
       })
-      (p, if(filteredRDD.count > 0) rdd else emptyRDD)
+      (p, if(filteredRDD.count > 0) filteredRDD else emptyRDD)
     }
+  }
+
+  def filterRDDByDateFields(
+    dateFields: Tuple2[String,String],
+    rdd: RDD[Tuple2[Object, BSONObject]],
+    start: Date,
+    end: Date,
+    ctx: SparkContext
+  ): RDD[Tuple2[Object, BSONObject]] = {
+    //val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)x3
+    val emptyRDD = ctx.emptyRDD[Tuple2[Object, BSONObject]]
+    val filteredRDD = rdd.filter(element => {
+      def parseDate(d: String): Option[Date] = {
+        try {
+          val Format = "E MMM dd HH:mm:ss Z yyyy"
+          Some(new SimpleDateFormat(Format).parse(d))
+        } catch {case _: Throwable => None }
+      }
+      val lowerDateField = parseDate(element._2.get(dateFields._1).toString)
+      val upperDateField = parseDate(element._2.get(dateFields._2).toString)
+      (lowerDateField, upperDateField) match {
+        case (Some(lowerDate), Some(upperDate)) => {
+          val lowerValidation = (lowerDate.after(start) || lowerDate.equals(start)) && (lowerDate.before(end) || lowerDate.equals(end))
+          val upperValidation = (upperDate.after(start) || upperDate.equals(start)) && (upperDate.before(end) || upperDate.equals(end))
+          lowerValidation && upperValidation
+        }
+        case _ => false
+      }
+    })
+    if(filteredRDD.count > 0) filteredRDD else emptyRDD
   }
 
   protected def parseDate(json: JsValue, key: String): Date = {
@@ -131,9 +166,5 @@ trait WazzaActor {
     collection.insert(resultsToMongo(results))
     client.close()
   }
-
-  //Messages
-  trait WazzaMessage
-  case class InputCollection(companyName: String, applicationName: String) extends WazzaMessage
-  case class OutputCollection(companyName: String, applicationName: String) extends WazzaMessage
 }
+

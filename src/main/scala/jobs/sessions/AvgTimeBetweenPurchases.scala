@@ -124,12 +124,13 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val payingUsersRDD = sc.newAPIHadoopRDD(
+    val rdd = sc.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    )// TODO filter
+    )
+    val payingUsersRDD = filterRDDByDateFields(("lowerDate", "upperDate"), rdd, start, end, sc)
 
     if(payingUsersRDD.count > 0) {
       AvgTimeBetweenPurchases.reduceRDD(
@@ -177,7 +178,6 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
       start,
       end
     )
-    //val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
 
     promise.future
   }

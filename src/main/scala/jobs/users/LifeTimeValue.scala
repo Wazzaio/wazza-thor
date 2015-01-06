@@ -94,13 +94,19 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val arpuRDD = ctx.newAPIHadoopRDD(
-      jobConfig,
-      classOf[com.mongodb.hadoop.MongoInputFormat],
-      classOf[Object],
-      classOf[BSONObject]
-    )//TODO .filter
-      
+    val arpuRDD = filterRDDByDateFields(
+      ("lowerDate", "upperDate"),
+      ctx.newAPIHadoopRDD(
+        jobConfig,
+        classOf[com.mongodb.hadoop.MongoInputFormat],
+        classOf[Object],
+        classOf[BSONObject]
+      ),
+      start,
+      end,
+      ctx
+    )
+
     if(arpuRDD.count > 0) {
       Some(arpuRDD.map{t => Json.parse(t._2.toString)}.collect.toList.head)
     } else {
@@ -123,13 +129,19 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val nrSessionsPerUserRDD = ctx.newAPIHadoopRDD(
-      jobConfig,
-      classOf[com.mongodb.hadoop.MongoInputFormat],
-      classOf[Object],
-      classOf[BSONObject]
-    )//TODO .filter // val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    
+    val nrSessionsPerUserRDD = filterRDDByDateFields(
+      ("lowerDate", "upperDate"),
+      ctx.newAPIHadoopRDD(
+        jobConfig,
+        classOf[com.mongodb.hadoop.MongoInputFormat],
+        classOf[Object],
+        classOf[BSONObject]
+      ),
+      start,
+      end,
+      ctx
+    )
+
     if(nrSessionsPerUserRDD.count > 0) {
       val result = nrSessionsPerUserRDD.map{t =>
         val nrSessionsUserList = Json.parse(t._2.get("nrSessionsPerUser").toString).as[JsArray].value
