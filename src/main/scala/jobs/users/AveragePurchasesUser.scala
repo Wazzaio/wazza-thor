@@ -5,6 +5,7 @@ import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
+import org.apache.spark.rdd.RDD
 import scala.util.Try
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
@@ -22,6 +23,38 @@ import scala.collection.mutable.Map
 
 object AveragePurchasesUser {
   def props(sc: SparkContext): Props = Props(new AveragePurchasesUser(sc))
+
+  val platforms = List("Android", "iOS")
+
+  def mapRDD(rdd: RDD[Tuple2[Object, BSONObject]]) = {
+    rdd map {element =>
+      val totalPurchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size
+      val purchasesPerPlatform = platforms map {platform =>
+        val p = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray]
+        val nrPurchases = p.value.find(el => (el \ "platform").as[String] == platform) match {
+          case Some(platformPurchases) => (platformPurchases \ "purchases").as[JsArray].value.size
+          case _ => 0
+        }
+        new PurchasePerPlatform(platform, nrPurchases)
+      }
+      new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
+    }
+  }
+
+  def reduceRDD(rdd: RDD[PurchasePerUser]) = {
+    rdd.reduce{(res, current) =>
+      val total = res.totalPurchases + current.totalPurchases
+      val purchasesPerPlatforms = platforms map {p =>
+        def purchaseCalculator(pps: List[PurchasePerPlatform]) = {
+          pps.find(_.platform == p).get.purchases
+        }
+        val updatedPurchases = purchaseCalculator(current.platforms) + purchaseCalculator(res.platforms)
+        val result = new PurchasePerPlatform(p, updatedPurchases)
+        result
+      }
+      new PurchasePerUser(null, total, purchasesPerPlatforms.toList)
+    }
+  }
 }
 
 sealed case class AveragePurchaseUserPerPlatform(platform: String, value: Double)
@@ -96,58 +129,32 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
       }
     })**/
 
-    if(payingUsersRDD.count > 0) {
-      val payingUsers = payingUsersRDD map {element =>
-        val totalPurchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size
-        val purchasesPerPlatform = platforms map {platform =>
-          val p = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray]
-          val nrPurchases = p.value.find(el => (el \ "platform").as[String] == platform) match {
-            case Some(platformPurchases) => (platformPurchases \ "purchases").as[JsArray].value.size
-            case _ => 0
-          }
-          new PurchasePerPlatform(platform, nrPurchases)
-        }
-        new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
-      }
-
-      val purchases = payingUsers.reduce{(res, current) =>
-        val total = res.totalPurchases + current.totalPurchases
-        val purchasesPerPlatforms = platforms map {p =>
-          def purchaseCalculator(pps: List[PurchasePerPlatform]) = {
-            pps.find(_.platform == p).get.purchases
-          }
-          val updatedPurchases = purchaseCalculator(current.platforms) + purchaseCalculator(res.platforms)
-          val result = new PurchasePerPlatform(p, updatedPurchases)
-          result
-        }
-        new PurchasePerUser(null, total, purchasesPerPlatforms.toList)
-      }
-
+    val result = if(payingUsersRDD.count > 0) {
+      val payingUsers = AveragePurchasesUser.mapRDD(payingUsersRDD)
+      val purchases = AveragePurchasesUser.reduceRDD(payingUsers)
       val nrUsers = payingUsers.count
-      val result = new AveragePurchaseUser(
+      new AveragePurchaseUser(
         purchases.totalPurchases / nrUsers,
         purchases.platforms.map{p =>new AveragePurchaseUserPerPlatform(p.platform, p.purchases / nrUsers)}
       )
-
-      saveResultToDatabase(
-        ThorContext.URI,
-        getCollectionOutput(companyName, applicationName),
-        result,
-        start,
-        end,
-        companyName,
-        applicationName
-      )
-      promise.success()
-
     } else {
-      log.error("Count is zero")
-      promise.failure(new Exception)
+      log.info("Count is zero")
+      new AveragePurchaseUser(0.0, platforms map {new AveragePurchaseUserPerPlatform(_, 0.0)})
     }
 
+    saveResultToDatabase(
+      ThorContext.URI,
+      getCollectionOutput(companyName, applicationName),
+      result,
+      start,
+      end,
+      companyName,
+      applicationName
+    )
+    promise.success()
     promise.future
-  }
-
+  }   
+      
   def kill = stop(self)
 
   def receive = {

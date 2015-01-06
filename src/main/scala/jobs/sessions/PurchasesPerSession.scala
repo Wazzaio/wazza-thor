@@ -4,6 +4,7 @@ import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
+import org.apache.spark.rdd.RDD
 import scala.collection.mutable.ListBuffer
 import scala.util.Try
 import org.apache.hadoop.conf.Configuration
@@ -21,6 +22,65 @@ import play.api.libs.json._
 
 object PurchasesPerSession {
   def props(sc: SparkContext): Props = Props(new PurchasesPerSession(sc))
+
+  def mapPayingUsersRDD(rdd: RDD[Tuple2[Object, BSONObject]], platforms: List[String]) = {
+    rdd map {element =>
+      val totalPurchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size
+      val purchasesPerPlatform = platforms map {platform =>
+        val p = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray]
+        val nrPurchases = p.value.find(el => (el \ "platform").as[String] == platform) match {
+          case Some(platformPurchases) => (platformPurchases \ "purchases").as[JsArray].value.size
+          case _ => 0
+        }
+        new PurchasePerPlatform(platform, nrPurchases)
+      }
+      new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
+    }
+  }
+
+  def reducePayingUsers(rdd: RDD[PurchasePerUser], platforms: List[String]): PurchasePerUser = {
+    rdd.reduce{(res, current) =>
+      val total = res.totalPurchases + current.totalPurchases
+      val purchasesPerPlatforms = platforms map {p =>
+        def purchaseCalculator(pps: List[PurchasePerPlatform]) = {
+          pps.find(_.platform == p).get.purchases
+        }
+        val updatedPurchases = purchaseCalculator(current.platforms) + purchaseCalculator(res.platforms)
+        val result = new PurchasePerPlatform(p, updatedPurchases)
+        result
+      }
+      new PurchasePerUser(null, total, purchasesPerPlatforms.toList)
+    }
+  }
+
+  def mapSessionsRDD(rdd: RDD[Tuple2[Object, BSONObject]], platforms: List[String]) = {
+    rdd map {element =>
+      val totalSessions = Json.parse(element._2.get("result").toString).as[Double]
+      val sessionsPerPlatform = platforms map {platform =>
+        val p = Json.parse(element._2.get("platforms").toString).as[JsArray]
+        val nrSessions = p.value.find(el => (el \ "platform").as[String] == platform) match {
+          case Some(s) => (s \ "res").as[Double]
+          case _ => 0
+        }
+        new SessionsPerPlatform(platform, nrSessions)
+      }
+      new NrSessions(totalSessions, sessionsPerPlatform)
+    }
+  }
+
+  def reduceSessions(rdd: RDD[NrSessions], platforms: List[String]): NrSessions = {
+    rdd reduce{(res, current) => {
+      val totalSessions = res.total + current.total
+      val sessionsPerPlatforms = platforms map {p =>
+        def sessionCalculator(pps: List[SessionsPerPlatform]) = {
+          pps.find(_.platform == p).get.sessions
+        }
+        val updatedPurchases = sessionCalculator(current.platforms) + sessionCalculator(res.platforms)
+        new SessionsPerPlatform(p, updatedPurchases)
+      }
+      new NrSessions(totalSessions, sessionsPerPlatforms)
+    }}
+  }
 }
 
 sealed case class PurchasePerPlatform(platform: String, purchases: Double)
@@ -105,30 +165,9 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     })**/
 
     if(payingUsersRDD.count > 0) {
-      val payingUsers = payingUsersRDD map {element =>
-        val totalPurchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size
-        val purchasesPerPlatform = platforms map {platform =>
-          val p = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray]
-          val nrPurchases = p.value.find(el => (el \ "platform").as[String] == platform) match {
-            case Some(platformPurchases) => (platformPurchases \ "purchases").as[JsArray].value.size
-            case _ => 0
-          }
-          new PurchasePerPlatform(platform, nrPurchases)
-        }
-        new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
-      }
-      payingUsers.reduce{(res, current) => 
-        val total = res.totalPurchases + current.totalPurchases
-        val purchasesPerPlatforms = platforms map {p =>
-          def purchaseCalculator(pps: List[PurchasePerPlatform]) = {
-            pps.find(_.platform == p).get.purchases
-          }
-          val updatedPurchases = purchaseCalculator(current.platforms) + purchaseCalculator(res.platforms)
-          val result = new PurchasePerPlatform(p, updatedPurchases)
-          result
-        }
-        new PurchasePerUser(null, total, purchasesPerPlatforms.toList)
-      }
+      PurchasesPerSession.reducePayingUsers(
+        PurchasesPerSession.mapPayingUsersRDD(payingUsersRDD, platforms), platforms
+      )
     } else {
       log.error("Count is zero")
       PurchasePerUser.apply
@@ -149,30 +188,9 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     )//TODO TIME FILTER
 
     if(sessionsRDD.count > 0) {
-      val nrSessions = sessionsRDD map {element =>
-        val totalSessions = Json.parse(element._2.get("result").toString).as[Double]
-        val sessionsPerPlatform = platforms map {platform =>
-          val p = Json.parse(element._2.get("platforms").toString).as[JsArray]
-          val nrSessions = p.value.find(el => (el \ "platform").as[String] == platform) match {
-            case Some(s) => (s \ "res").as[Double]
-            case _ => 0
-          }
-          new SessionsPerPlatform(platform, nrSessions)
-        }
-        new NrSessions(totalSessions, sessionsPerPlatform)
-      }
-
-      nrSessions.reduce{(res, current) => {
-        val totalSessions = res.total + current.total
-        val sessionsPerPlatforms = platforms map {p =>
-          def sessionCalculator(pps: List[SessionsPerPlatform]) = {
-            pps.find(_.platform == p).get.sessions
-          }
-          val updatedPurchases = sessionCalculator(current.platforms) + sessionCalculator(res.platforms)
-          new SessionsPerPlatform(p, updatedPurchases)
-        }
-        new NrSessions(totalSessions, sessionsPerPlatforms)
-      }}
+      PurchasesPerSession.reduceSessions(
+        PurchasesPerSession.mapSessionsRDD(sessionsRDD, platforms), platforms
+      )
     } else {
       log.error("empty session collection")
       NrSessions.apply

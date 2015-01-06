@@ -4,6 +4,7 @@ import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
+import org.apache.spark.rdd.RDD
 import scala.util.Try
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
@@ -26,6 +27,40 @@ import scala.collection.mutable._
 object PayingUsers {
   
   def props(ctx: SparkContext, d: List[ActorRef]): Props = Props(new PayingUsers(ctx, d))
+
+  def mapRDD(
+    rdd: RDD[Tuple2[Object, BSONObject]],
+    lowerDate: Date,
+    upperDate: Date,
+    platforms: List[String]
+  ): RDD[UserPurchases] = {
+    rdd.map(purchases => {
+      def parseDate(d: String): Option[Date] = {
+        try {
+          val Format = "E MMM dd HH:mm:ss Z yyyy"
+          Some(new SimpleDateFormat(Format).parse(d))
+        } catch {case _: Throwable => None }
+      }
+
+      val time = parseDate(purchases._2.get("time").toString)
+      val platform = (Json.parse(purchases._2.get("device").toString) \ "osType").as[String]
+      val info = new PurchaseInfo(purchases._2.get("id").toString, time.get, Some(platform))
+      (purchases._2.get("userId").toString, info)
+    }).groupByKey.map(purchaseInfo => {
+      val userId = purchaseInfo._1
+      val purchasesPerPlatform = platforms map {p =>
+        val platformPurchases = purchaseInfo._2.filter(_.platform match {
+          case Some(opt) => opt == p
+          case _ => false
+        }) map {pp =>
+          new PurchaseInfo(pp.purchaseId, pp.time)
+        }
+        new PlatformPurchases(p, platformPurchases.toList)
+      }
+
+      new UserPurchases(userId, purchaseInfo._2.toList, purchasesPerPlatform, lowerDate, upperDate)
+    })
+  }
 }
 
 case class PlatformPurchases(platform: String, purchases: List[PurchaseInfo])
@@ -150,44 +185,22 @@ class PayingUsers(
        }
      })
 
-     if(rdd.count() > 0) {
-       val payingUsers = rdd.map(purchases => {
-         def parseDate(d: String): Option[Date] = {
-           try {
-             val Format = "E MMM dd HH:mm:ss Z yyyy"
-             Some(new SimpleDateFormat(Format).parse(d))
-           } catch {case _: Throwable => None }
-         }
+     val result = if(rdd.count() > 0) {
+       PayingUsers.mapRDD(rdd, lowerDate, upperDate, platforms).collect.toList
+     } else {
+       List[UserPurchases]()
+     }
 
-         val time = parseDate(purchases._2.get("time").toString)
-         val platform = (Json.parse(purchases._2.get("device").toString) \ "osType").as[String]
-         val info = new PurchaseInfo(purchases._2.get("id").toString, time.get, Some(platform))
-         (purchases._2.get("userId").toString, info)
-       }).groupByKey.map(purchaseInfo => {
-         val userId = purchaseInfo._1
-         val purchasesPerPlatform = platforms map {p =>
-           val platformPurchases = purchaseInfo._2.filter(_.platform match {
-             case Some(opt) => opt == p
-             case _ => false
-           }) map {pp =>
-             new PurchaseInfo(pp.purchaseId, pp.time)
-           }
-           new PlatformPurchases(p, platformPurchases.toList)
-         }
+     val dbResult = saveResultToDatabase(ThorContext.URI,
+       outputCollection,
+       result,
+       lowerDate,
+       upperDate
+     )
 
-         new UserPurchases(userId, purchaseInfo._2.toList, purchasesPerPlatform, lowerDate, upperDate)
-       })
-       val dbResult = saveResultToDatabase(ThorContext.URI,
-         outputCollection,
-         payingUsers.collect.toList,
-         lowerDate,
-         upperDate
-       )
-
-       dbResult onComplete {
-         case Success(_) => promise.success()
-         case Failure(ex) => promise.failure(ex)
-       }
+     dbResult onComplete {
+       case Success(_) => promise.success()
+       case Failure(ex) => promise.failure(ex)
      }
     promise.future
   }
