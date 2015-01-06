@@ -90,16 +90,16 @@ class ActiveUsers(
       }
     }
 
-    if(!platforms.exists(_ == null)) {
+    val results = if(!platforms.exists(_ == null)) {
       val activeUsers = platformResults.foldLeft(0.0)(_ + _.res)
-      val results = new Results(activeUsers, platformResults, lowerDate, upperDate)
-      saveResultToDatabase(ThorContext.URI, outputCollection, results)
-      promise.success()
+      new Results(activeUsers, platformResults, lowerDate, upperDate)
     } else {
-      log.error("Count is zero")
-      promise.failure(new Exception)
+      log.info("One of collections is empty")
+      new Results(0.0, platforms map {new PlatformResults(_, 0.0)}, lowerDate, upperDate)
     }
 
+    saveResultToDatabase(ThorContext.URI, outputCollection, results)
+    promise.success()
     promise.future
   }
 

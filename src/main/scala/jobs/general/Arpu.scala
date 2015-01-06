@@ -32,7 +32,8 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
@@ -42,24 +43,22 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
     val optRevenue = getResultsByDateRange(revCollName, start, end)
     val optActive = getResultsByDateRange(activeCollName, start, end)
 
-    (optRevenue, optActive) match {
+    val results = (optRevenue, optActive) match {
       case (Some(totalRevenue), Some(activeUsers)) => {
         val arpu = if(activeUsers.result > 0) totalRevenue.result / activeUsers.result else 0
         val platformResults = (totalRevenue.platforms zip activeUsers.platforms).sorted map {p =>
           val pArpu = if(p._2.res > 0) p._1.res / p._2.res else 0
           new PlatformResults(p._1.platform, pArpu)
         }
-
-        val results = new Results(arpu, platformResults, start, end)
-        saveResultToDatabase(ThorContext.URI, getCollectionOutput(companyName, applicationName), results)
-        promise.success()
-      }
+        new Results(arpu, platformResults, start, end)      
+      } 
       case _ => {
-        log.error("One of collections is empty")
-        promise.failure(new Exception)
-      }
+        log.info("One of collections is empty")
+        new Results(0.0, platforms map {new PlatformResults(_, 0.0)}, start, end)
+      } 
     }
-
+    saveResultToDatabase(ThorContext.URI, getCollectionOutput(companyName, applicationName), results)
+    promise.success()
     promise.future
   }
 
@@ -71,7 +70,7 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, lower, upper) map { arpu =>
+        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
           log.info("Job completed successful")
           ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper, platforms)
           onJobSuccess(companyName, applicationName, "Arpu")

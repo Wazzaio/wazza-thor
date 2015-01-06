@@ -79,16 +79,16 @@ class TotalRevenue(
     }
 
     // Calculates total results and persist them
-    if(!platformResults.exists(_ == null)) {
+    val results = if(!platformResults.exists(_ == null)) {
       val totalRevenue = platformResults.foldLeft(0.0)(_ + _.res)
-      val results = new Results(totalRevenue, platformResults, lowerDate, upperDate)
-      saveResultToDatabase(ThorContext.URI, outputCollection, results)
-      promise.success()
+      new Results(totalRevenue, platformResults, lowerDate, upperDate)
+      
     } else {
-      log.error("Count is zero")
-      promise.failure(new Exception)
-    }
-
+      log.info("Count is zero")
+      new Results(0.0, platforms map {new PlatformResults(_, 0.0)}, lowerDate, upperDate)
+    } 
+    saveResultToDatabase(ThorContext.URI, outputCollection, results)
+    promise.success()
     promise.future
   }
 

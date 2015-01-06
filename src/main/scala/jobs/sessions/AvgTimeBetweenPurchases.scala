@@ -23,9 +23,7 @@ import org.joda.time.LocalDate
 object AvgTimeBetweenPurchases {
   def props(sc: SparkContext): Props = Props(new AvgTimeBetweenPurchases(sc))
 
-  protected val platforms = List("Android", "iOS") 
-
-  def mapRDD(rdd: RDD[Tuple2[Object, BSONObject]]) = {
+  def mapRDD(rdd: RDD[Tuple2[Object, BSONObject]], platforms: List[String]) = {
     rdd map {element =>
       def calculateSumTimeBetweenPurchases(lst: List[JsValue]): Double = {
         def getNumberSecondsBetweenDates(d1: Date, d2: Date): Float = {
@@ -71,7 +69,7 @@ object AvgTimeBetweenPurchases {
     }
   }
 
-  def reduceRDD(rdd: RDD[Tuple2[Double, List[Tuple3[String, Int, Double]]]]) = {
+  def reduceRDD(rdd: RDD[Tuple2[Double, List[Tuple3[String, Int, Double]]]], platforms: List[String]) = {
     rdd.reduce{(acc, current) => {
       val totalTime = acc._1 + current._1
       val platformData = platforms map {platform =>
@@ -135,7 +133,7 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
 
     if(payingUsersRDD.count > 0) {
       AvgTimeBetweenPurchases.reduceRDD(
-        AvgTimeBetweenPurchases.mapRDD(payingUsersRDD)
+        AvgTimeBetweenPurchases.mapRDD(payingUsersRDD, platforms), platforms
       )
     } else {
       // Empty result

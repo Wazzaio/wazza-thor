@@ -43,23 +43,23 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
     val optRevenue = getResultsByDateRange(revCollName, start, end)
     val optNrSessions = getResultsByDateRange(nrSessionsCollName, start, end)
 
-    (optRevenue, optNrSessions) match {
+    val results = (optRevenue, optNrSessions) match {
       case (Some(totalRevenue), Some(nrSessions)) => {
         val avgRevenueSessions = if(nrSessions.result > 0) totalRevenue.result / nrSessions.result else 0
         val platformResults = (totalRevenue.platforms zip nrSessions.platforms).sorted map {p =>
           val aAvgRevenueSessions = if(p._2.res > 0) p._1.res / p._2.res else 0
           new PlatformResults(p._1.platform, aAvgRevenueSessions)
         }
-        val results = new Results(avgRevenueSessions, platformResults, start, end)
-        saveResultToDatabase(ThorContext.URI, getCollectionOutput(companyName, applicationName), results)
-        promise.success()
+        new Results(avgRevenueSessions, platformResults, start, end)
       }
       case _ => {
-        log.error("One of collections is empty")
-        promise.failure(new Exception)
+        log.info("One of collections is empty")
+        new Results(0.0, platforms map {new PlatformResults(_, 0.0)}, start, end)
       }
     }
 
+    saveResultToDatabase(ThorContext.URI, getCollectionOutput(companyName, applicationName), results)
+    promise.success()
     promise.future
   }
 

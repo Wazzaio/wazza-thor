@@ -175,7 +175,8 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
     def getNumberSecondsBetweenDates(d1: Date, d2: Date): Float = {
@@ -247,7 +248,7 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, upper, lower) map { arpu =>
+        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
           log.info("Job completed successful")
           onJobSuccess(companyName, applicationName, "Average Time First Purchase")
         } recover {

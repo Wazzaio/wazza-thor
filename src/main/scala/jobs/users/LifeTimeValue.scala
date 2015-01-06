@@ -128,7 +128,7 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    )//TODO .filter
+    )//TODO .filter // val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
     
     if(nrSessionsPerUserRDD.count > 0) {
       val result = nrSessionsPerUserRDD.map{t =>
@@ -181,7 +181,6 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
     val optNrSessionsUser = getNumberSessionsPerUser(companyName, applicationName, start, end, platforms)
 
     // TODO - missing user retention rate
-    // val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
     val result = (optARPU, optNrSessionsUser) match {
       case (Some(arpuJson), Some(nrSessionsUser)) => {
         val arpu = (arpuJson \ "result").as[Double]
@@ -217,6 +216,7 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
       start
     )
 
+    promise.success()
     promise.future
   }
 

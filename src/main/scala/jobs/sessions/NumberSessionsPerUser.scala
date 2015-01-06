@@ -116,8 +116,8 @@ class NumberSessionsPerUser(
       new PlatformNrSessionsPerUser(rdd._1, numberSessionsPerUser)
     }
 
-    if(!platformResults.isEmpty) {
-      val results = platformResults.foldLeft(List.empty[SessionsPerUserResult]){(lst, element) => {
+    val results = if(!platformResults.isEmpty) {
+      platformResults.foldLeft(List.empty[SessionsPerUserResult]){(lst, element) => {
         var buffer: ListBuffer[SessionsPerUserResult] = lst.to[ListBuffer]
         for(spu <- element.sessionsPerUser) {
           if(!buffer.exists(_.userId == spu.userId)) {
@@ -145,12 +145,13 @@ class NumberSessionsPerUser(
           }
         }
         buffer.toList
-      }}
-
-      saveResultToDatabase(ThorContext.URI, outputCollection, results, lowerDate, upperDate)
-      promise.success()
+      }}     
+    } else {
+      List[SessionsPerUserResult]()
     }
 
+    saveResultToDatabase(ThorContext.URI, outputCollection, results, lowerDate, upperDate)
+    promise.success()
     promise.future
   }
 

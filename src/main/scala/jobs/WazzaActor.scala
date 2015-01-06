@@ -72,7 +72,6 @@ trait WazzaActor {
     val dateFields = ("lowerDate", "upperDate")
     val coll = mongoClient(uri.database.getOrElse("dev"))(collection)
     val query = (dateFields._1 $gte end $lte start) ++ (dateFields._2 $gte end $lte start)
-
     coll.findOne(query) match {
       case Some(res) => {
         def parsePlatforms(arr: JsArray) = {
