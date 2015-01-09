@@ -95,16 +95,20 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
     collectionName: String,
     result: Tuple2[Double, List[Tuple2[String, Double]]],
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ) = {
     val uri  = MongoClientURI(uriStr)
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
+    val platformResults = if(result._2.isEmpty) {
+      platforms map {p => MongoDBObject("platform" -> p, "value" -> 0.0)}
+    } else {
+      result._2 map {el => MongoDBObject("platform" -> el._1, "value" -> el._2)}
+    }
     val obj = MongoDBObject(
-      "avgTimeBetweenPurchases" -> MongoDBObject(
-        "total" -> result._1,
-        "platforms" -> (result._2 map {el => MongoDBObject("platform" -> el._1, "value" -> el._2)})
-      ),
+      "total" -> result._1,
+      "platforms" -> platformResults,
       "lowerDate" -> start,
       "upperDate" -> end
     )
@@ -176,7 +180,8 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
       getCollectionOutput(companyName, applicationName),
       finalResult,
       start,
-      end
+      end,
+      platforms
     )
 
     promise.future

@@ -119,13 +119,20 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     end: Date,
     start: Date,
     companyName: String,
-    applicationName: String
+    applicationName: String,
+    platforms: List[String]
   ) = {
     val uri  = MongoClientURI(uriStr)
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
+    val platformResults = if(result.platforms.isEmpty) {
+      platforms.map {p => MongoDBObject("platform" -> p, "value" -> 0.0)}
+    } else {
+      result.platforms.map{PurchasesPerSessionPerPlatformToBson(_)}
+    }
     val obj = MongoDBObject(
-      "avgPurchasesSession" -> PurchasesPerSessionResultToBson(result),
+      "total" -> result.total,
+      "platforms" -> platformResults,
       "lowerDate" -> start,
       "upperDate" -> end
     )
@@ -240,7 +247,9 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       new PurchasesPerSessionResult(totalResult, resultPlatforms),
       end,
       start,
-      companyName, applicationName
+      companyName,
+      applicationName,
+      platforms
     )
     promise.future
   }
