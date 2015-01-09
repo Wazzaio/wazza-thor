@@ -102,9 +102,9 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val platformResults = if(result._2.isEmpty) {
-      platforms map {p => MongoDBObject("platform" -> p, "value" -> 0.0)}
+      platforms map {p => MongoDBObject("platform" -> p, "res" -> 0.0)}
     } else {
-      result._2 map {el => MongoDBObject("platform" -> el._1, "value" -> el._2)}
+      result._2 map {el => MongoDBObject("platform" -> el._1, "res" -> el._2)}
     }
     val obj = MongoDBObject(
       "total" -> result._1,

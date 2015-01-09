@@ -33,7 +33,7 @@ sealed case class LifeTimeValuePlatformsResult(value: Double, platform: String)
 object LifeTimeValuePlatformsResult {
 
   implicit def toBSON(ltv: LifeTimeValuePlatformsResult): MongoDBObject = {
-    MongoDBObject("value" -> ltv.value, "platform" -> ltv.platform)
+    MongoDBObject("res" -> ltv.value, "platform" -> ltv.platform)
   }
 
   implicit def toListBSON(lst: List[LifeTimeValuePlatformsResult]): List[MongoDBObject] = {
@@ -73,7 +73,7 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val platformResults = if(result.platforms.isEmpty) {
-      platforms.map {p => MongoDBObject("platform" -> p, "value" -> 0.0)}
+      platforms.map {p => MongoDBObject("platform" -> p, "res" -> 0.0)}
     } else {
       LifeTimeValuePlatformsResult.toListBSON(result.platforms)
     }

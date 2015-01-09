@@ -105,11 +105,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
   def outputCollectionType: String = "PurchasesPerSession"
 
   private implicit def PurchasesPerSessionPerPlatformToBson(p: PurchasesPerSessionPerPlatform): MongoDBObject = {
-    MongoDBObject("platform" -> p.platform, "value" -> p.value)
-  }
-
-  private implicit def PurchasesPerSessionResultToBson(p: PurchasesPerSessionResult): MongoDBObject = {
-    MongoDBObject("total" -> p.total, "platforms" -> p.platforms.map(PurchasesPerSessionPerPlatformToBson(_)))
+    MongoDBObject("platform" -> p.platform, "res" -> p.value)
   }
 
   private def saveResultToDatabase(
@@ -126,7 +122,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val platformResults = if(result.platforms.isEmpty) {
-      platforms.map {p => MongoDBObject("platform" -> p, "value" -> 0.0)}
+      platforms.map {p => MongoDBObject("platform" -> p, "res" -> 0.0)}
     } else {
       result.platforms.map{PurchasesPerSessionPerPlatformToBson(_)}
     }

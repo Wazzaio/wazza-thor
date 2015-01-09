@@ -67,7 +67,7 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
   def outputCollectionType: String = "avgPurchasesUser"
 
   private def averagePurchaseUserPerPlatformToBson(p: AveragePurchaseUserPerPlatform): MongoDBObject = {
-    MongoDBObject("platform" -> p.platform, "value" -> p.value)
+    MongoDBObject("platform" -> p.platform, "res" -> p.value)
   }
 
   private def saveResultToDatabase(
@@ -84,7 +84,7 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val platformResults = if(result.platforms.isEmpty) {
-      platforms.map {p => MongoDBObject("platform" -> p, "value" -> 0.0)}
+      platforms.map {p => MongoDBObject("platform" -> p, "res" -> 0.0)}
     } else {
       result.platforms.map{averagePurchaseUserPerPlatformToBson(_)}
     }
