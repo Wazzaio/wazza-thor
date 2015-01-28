@@ -5,6 +5,7 @@ import com.mongodb.MongoClient
 import com.mongodb.MongoClientURI
 import java.util.Date
 import org.apache.spark._
+import org.apache.spark.rdd.RDD
 import scala.util.Try
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
@@ -13,7 +14,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, Props, ActorRef}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
@@ -34,30 +34,12 @@ class NumberSessions(
   def inputCollectionType: String = "mobileSessions"
   def outputCollectionType: String = "numberSessions"
 
-  private def saveResultToDatabase(
-    uriStr: String,
-    collectionName: String,
-    avgSessionLength: Double,
-    lowerDate: Date,
-    upperDate: Date
-  ) = {
-    val uri  = new MongoClientURI(uriStr)
-    val client = new MongoClient(uri)
-    val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
-    val result = new BasicDBObject
-    result.put("totalSessions", avgSessionLength)
-    result.put("lowerDate", lowerDate.getTime)
-    result.put("upperDate", upperDate.getTime)
-    collection.insert(result)
-    client.close()
-  }
-
   private def executeJob(
     inputCollection: String,
     outputCollection: String,
     lowerDate: Date,
-    upperDate: Date
-      
+    upperDate: Date,
+    platforms: List[String]
   ): Future[Unit] = {
 
     val promise = Promise[Unit]
@@ -69,55 +51,48 @@ class NumberSessions(
     jobConfig.set("mongo.output.uri", outputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val mongoRDD = ctx.newAPIHadoopRDD(
+    val rdd = ctx.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter((t: Tuple2[Object, BSONObject]) => {
-      def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
-      }
+    )
 
-      parseFloat(t._2.get("startTime").toString) match {
-        case Some(dbDate) => {
-          val startDate = new Date(dbDate)
-          startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
-        }
-        case _ => false
-      }
-    })
+    // Creates an RDD with data of mobile platform
+    val rdds = getRDDPerPlatforms("startTime", platforms, rdd, lowerDate, upperDate, ctx)
 
-    val count = mongoRDD.count()
-    if(count > 0) {
-      val numberSessions = (mongoRDD.map(arg => {
-        (arg._2.get("id"), 1)
-      })).groupByKey().count()
-
-      saveResultToDatabase(uri, outputCollection, numberSessions, lowerDate, upperDate)
-      promise.success()
-    } else {
-      log.error("count is zero")
-      promise.failure(new Exception())
+    // Calculates results per platform
+    val platformResults = rdds map {rdd =>
+      val numberSessions = if(rdd._2.count > 0) {
+        rdd._2.map((arg: Tuple2[Object, BSONObject]) => {
+          (arg._2.get("id"), 1)
+        }).groupByKey.count
+      } else 0
+      new PlatformResults(rdd._1, numberSessions)
     }
 
+    val totalNumberSessions = platformResults.foldLeft(0.0)(_ + _.res)
+    val results = new Results(totalNumberSessions, platformResults, lowerDate, upperDate)
+    saveResultToDatabase(ThorContext.URI, outputCollection, results)
+    promise.success()
     promise.future
   }
 
   def kill = stop(self)
 
   def receive = {
-    case InitJob(companyName, applicationName, lowerDate, upperDate) => {
+    case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
       log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
       supervisor = sender
       executeJob(
         getCollectionInput(companyName, applicationName),
         getCollectionOutput(companyName, applicationName),
         lowerDate,
-        upperDate
+        upperDate,
+        platforms
       ) map {res =>
         log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Number Sessions", lowerDate, upperDate)
+        onJobSuccess(companyName, applicationName, "Number Sessions", lowerDate, upperDate, platforms)
       } recover {
         case ex: Exception => {
           log.error("Job failed")

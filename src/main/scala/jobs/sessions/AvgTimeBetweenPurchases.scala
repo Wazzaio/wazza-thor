@@ -4,6 +4,7 @@ import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
+import org.apache.spark.rdd.RDD
 import scala.util.Try
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
@@ -12,7 +13,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
@@ -22,6 +22,66 @@ import org.joda.time.LocalDate
 
 object AvgTimeBetweenPurchases {
   def props(sc: SparkContext): Props = Props(new AvgTimeBetweenPurchases(sc))
+
+  def mapRDD(rdd: RDD[Tuple2[Object, BSONObject]], platforms: List[String]) = {
+    rdd map {element =>
+      def calculateSumTimeBetweenPurchases(lst: List[JsValue]): Double = {
+        def getNumberSecondsBetweenDates(d1: Date, d2: Date): Float = {
+          (new LocalDate(d2).toDateTimeAtCurrentTime.getMillis - new LocalDate(d1).toDateTimeAtCurrentTime().getMillis) / 1000
+        }
+
+        def parseDate(json: JsValue, key: String): Date = {
+          val dateStr = (json \ key \ "$date").as[String]
+          val ops = new StringOps(dateStr)
+          new SimpleDateFormat("yyyy-MM-dd").parse(ops.take(ops.indexOf('T')))
+        }
+
+        val purchases = lst.zipWithIndex
+        if(purchases.size > 1) {
+          purchases.foldLeft(0.0){(acc, current) => {
+            val index = current._2
+            if(index < purchases.size) {
+              acc + getNumberSecondsBetweenDates(
+                parseDate(current._1, "time"),
+                parseDate(purchases(index+1)._1, "time")
+              )
+            } else acc
+          }}
+        } else 0.0
+      }
+
+      val purchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.toList
+      val sumTimeAllPurchases = calculateSumTimeBetweenPurchases(purchases)
+      val totalPurchases = purchases.size
+
+      val purchasesPerPlatform = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray].value
+      val sumTimeAllPurchasesPerPlatform = platforms map {platform =>
+        val timeAndNrPurchases = purchasesPerPlatform.find(e => (e \ "platform").as[String] == platform) match {
+          case Some(platformData) => {
+            val p = (platformData \ "purchases").as[JsArray].value.toList
+            (p.size, calculateSumTimeBetweenPurchases(p))
+          }
+          case _ => (0, 0.0)
+        }
+        (platform, timeAndNrPurchases._1, timeAndNrPurchases._2)
+      }
+      (sumTimeAllPurchases, sumTimeAllPurchasesPerPlatform)
+    }
+  }
+
+  def reduceRDD(rdd: RDD[Tuple2[Double, List[Tuple3[String, Int, Double]]]], platforms: List[String]) = {
+    rdd.reduce{(acc, current) => {
+      val totalTime = acc._1 + current._1
+      val platformData = platforms map {platform =>
+        val accumPlatformData = acc._2.find(_._1 == platform).get
+        val pData = current._2.find(_._1 == platform).get
+        val updatedNumberPurchases = accumPlatformData._2 + pData._2
+        val updatedTime = accumPlatformData._3 + pData._3
+        (platform, updatedNumberPurchases, updatedTime)
+      }
+      (totalTime, platformData)
+    }}
+  }
 }
 
 class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
@@ -33,29 +93,65 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    result: Double,
-    end: Date,
+    result: Tuple2[Double, List[Tuple2[String, Double]]],
     start: Date,
-    companyName: String,
-    applicationName: String
+    end: Date,
+    platforms: List[String]
   ) = {
     val uri  = MongoClientURI(uriStr)
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
+    val platformResults = if(result._2.isEmpty) {
+      platforms map {p => MongoDBObject("platform" -> p, "res" -> 0.0)}
+    } else {
+      result._2 map {el => MongoDBObject("platform" -> el._1, "res" -> el._2)}
+    }
     val obj = MongoDBObject(
-      "avgTimeBetweenPurchases" -> result,
-      "lowerDate" -> start.getTime,
-      "upperDate" -> end.getTime
+      "total" -> result._1,
+      "platforms" -> platformResults,
+      "lowerDate" -> start,
+      "upperDate" -> end
     )
     collection.insert(obj)
     client.close
+  }
+
+  private def calculateAverageTimeBetweenPurchases(
+    collectionName: String,
+    start: Date,
+    end: Date,
+    platforms: List[String]
+  ) = {
+    val uri = ThorContext.URI
+    val inputUri = s"${uri}.${collectionName}"
+    val jobConfig = new Configuration
+    jobConfig.set("mongo.input.uri", inputUri)
+    jobConfig.set("mongo.input.split.create_input_splits", "false")
+
+    val rdd = sc.newAPIHadoopRDD(
+      jobConfig,
+      classOf[com.mongodb.hadoop.MongoInputFormat],
+      classOf[Object],
+      classOf[BSONObject]
+    )
+    val payingUsersRDD = filterRDDByDateFields(("lowerDate", "upperDate"), rdd, start, end, sc)
+
+    if(payingUsersRDD.count > 0) {
+      AvgTimeBetweenPurchases.reduceRDD(
+        AvgTimeBetweenPurchases.mapRDD(payingUsersRDD, platforms), platforms
+      )
+    } else {
+      // Empty result
+      (0.0, platforms map {(_, 0, 0.0)})
+    }
   }
 
   def executeJob(
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
@@ -63,64 +159,45 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
       (new LocalDate(d2).toDateTimeAtCurrentTime.getMillis - new LocalDate(d1).toDateTimeAtCurrentTime().getMillis) / 1000
     }
 
-    val dateFields = ("lowerDate", "upperDate")
-    val payingUsersCollName = s"${companyName}_payingUsers_${applicationName}"
-    val uri = MongoClientURI(ThorContext.URI)
-    val mongoClient = MongoClient(uri)
-    val payingUsersCollection = mongoClient(uri.database.getOrElse("dev"))(payingUsersCollName)
-
-    val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-
-    var numberPurchases = 0
-    var accTime = 0.0
-    payingUsersCollection.find(query) foreach {element =>
-      val purchases = (Json.parse(element.toString) \ "purchases").as[JsArray].value.zipWithIndex
-      for(purchaseInfo <- purchases) {
-        val index = purchaseInfo._2
-        if(purchases.size == 1) {
-          numberPurchases += 1
-        } else {
-          if((index+1) < purchases.size ) {
-            val currentPurchaseDate = new Date((purchaseInfo._1 \ "time").as[Float].longValue)
-            val nextPurchaseDate = new Date((purchases(index+1)._1 \ "time").as[Float].longValue)
-            accTime += getNumberSecondsBetweenDates(currentPurchaseDate, nextPurchaseDate)
-          }
-        }
-      }
+    val data = calculateAverageTimeBetweenPurchases(
+      s"${companyName}_payingUsers_${applicationName}",
+      start,
+      end,
+      platforms
+    )
+    val totalPurchases = data._2.foldLeft(0.0){_ + _._2}
+    val totalTimeBetweenPurchases = if(totalPurchases > 0) data._1 / totalPurchases else 0.0
+    val timeBetweenPurchasesPerPlatform = platforms map {platform =>
+      val platformData = data._2.find(_._1 == platform).get
+      val result = if(platformData._2 > 0) platformData._3 / platformData._2 else 0.0
+      (platform, result)
     }
 
-    if(numberPurchases > 0 && accTime > 0) {
-      val result =  if(numberPurchases == 0) 0 else accTime / numberPurchases
-      saveResultToDatabase(
-        ThorContext.URI,
-        getCollectionOutput(companyName, applicationName),
-        result,
-        start,
-        end,
-        companyName,
-        applicationName
-      )
-      promise.success()
-    } else {
-      log.error("empty collection")
-      promise.failure(new Exception)
-    }
+    val finalResult = (totalTimeBetweenPurchases, timeBetweenPurchasesPerPlatform)
 
-    mongoClient.close
+    saveResultToDatabase(
+      ThorContext.URI,
+      getCollectionOutput(companyName, applicationName),
+      finalResult,
+      start,
+      end,
+      platforms
+    )
+
     promise.future
   }
 
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
       log.info(s"core job ended ${sender.toString}")
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, upper, lower) map { arpu =>
+        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
           log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, "Average Time Between Purchases")
+          onJobSuccess(companyName, applicationName, "Average Time Between Purchases, platforms")
         } recover {
           case ex: Exception => onJobFailure(ex, "Average Time Between Purchases")
         }

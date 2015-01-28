@@ -12,7 +12,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
@@ -29,85 +28,50 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "avgRevenueSession"
 
-  //TODO
-  private def saveResultToDatabase(
-    uriStr: String,
-    collectionName: String,
-    result: Double,
-    end: Date,
-    start: Date,
-    companyName: String,
-    applicationName: String
-  ) = {
-    val uri  = MongoClientURI(uriStr)
-    val client = MongoClient(uri)
-    val collection = client.getDB(uri.database.get)(collectionName)
-    val obj = MongoDBObject(
-      "avgRevenueSession" -> result,
-      "lowerDate" -> start.getTime,
-      "upperDate" -> end.getTime
-    )
-    collection.insert(obj)
-    client.close
-  }
-
   def executeJob(
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
-    val dateFields = ("lowerDate", "upperDate")
     val revCollName = s"${companyName}_TotalRevenue_${applicationName}"
     val nrSessionsCollName = s"${companyName}_numberSessions_${applicationName}"
-    val uri = MongoClientURI(ThorContext.URI)
-    val mongoClient = MongoClient(uri)
-    val revCollection = mongoClient(uri.database.getOrElse("dev"))(revCollName)
-    val nrSessionsCollection = mongoClient(uri.database.getOrElse("dev"))(nrSessionsCollName)
-    
-    val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    val nrSessions = nrSessionsCollection.findOne(query).getOrElse(None)
-    val totalRevenue = revCollection.findOne(query).getOrElse(None)
 
-    (nrSessions, totalRevenue) match {
-      case (None, None) => {
-        log.error("cannot find elements")
-        promise.failure(new Exception)
+    val optRevenue = getResultsByDateRange(revCollName, start, end)
+    val optNrSessions = getResultsByDateRange(nrSessionsCollName, start, end)
+
+    val results = (optRevenue, optNrSessions) match {
+      case (Some(totalRevenue), Some(nrSessions)) => {
+        val avgRevenueSessions = if(nrSessions.result > 0) totalRevenue.result / nrSessions.result else 0
+        val platformResults = (totalRevenue.platforms zip nrSessions.platforms).sorted map {p =>
+          val aAvgRevenueSessions = if(p._2.res > 0) p._1.res / p._2.res else 0
+          new PlatformResults(p._1.platform, aAvgRevenueSessions)
+        }
+        new Results(avgRevenueSessions, platformResults, start, end)
       }
-      case (sessions, revenue) => {
-        val s = (Json.parse(sessions.toString) \ "totalSessions").as[Int]
-        val r = (Json.parse(revenue.toString) \ "totalRevenue").as[Double]
-        val result = if(s > 0) r / s else 0
-
-        saveResultToDatabase(
-          ThorContext.URI,
-          getCollectionOutput(companyName, applicationName),
-          result,
-          start,
-          end,
-          companyName,
-          applicationName
-        )
-        promise.success()
+      case _ => {
+        log.info("One of collections is empty")
+        new Results(0.0, platforms map {new PlatformResults(_, 0.0)}, start, end)
       }
     }
 
-    mongoClient.close
-
+    saveResultToDatabase(ThorContext.URI, getCollectionOutput(companyName, applicationName), results)
+    promise.success()
     promise.future
   }
 
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
       log.info(s"core job ended ${sender.toString}")
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, upper, lower) map { arpu =>
+        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
           log.info("Job completed successful")
           onJobSuccess(companyName, applicationName, "Average Revenue Per Session")
         } recover {

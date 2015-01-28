@@ -5,6 +5,7 @@ import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
+import org.apache.spark.rdd.RDD
 import scala.util.Try
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
@@ -13,7 +14,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
@@ -23,7 +23,42 @@ import scala.collection.mutable.Map
 
 object AveragePurchasesUser {
   def props(sc: SparkContext): Props = Props(new AveragePurchasesUser(sc))
+
+  val platforms = List("Android", "iOS")
+
+  def mapRDD(rdd: RDD[Tuple2[Object, BSONObject]]) = {
+    rdd map {element =>
+      val totalPurchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size
+      val purchasesPerPlatform = platforms map {platform =>
+        val p = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray]
+        val nrPurchases = p.value.find(el => (el \ "platform").as[String] == platform) match {
+          case Some(platformPurchases) => (platformPurchases \ "purchases").as[JsArray].value.size
+          case _ => 0
+        }
+        new PurchasePerPlatform(platform, nrPurchases)
+      }
+      new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
+    }
+  }
+
+  def reduceRDD(rdd: RDD[PurchasePerUser]) = {
+    rdd.reduce{(res, current) =>
+      val total = res.totalPurchases + current.totalPurchases
+      val purchasesPerPlatforms = platforms map {p =>
+        def purchaseCalculator(pps: List[PurchasePerPlatform]) = {
+          pps.find(_.platform == p).get.purchases
+        }
+        val updatedPurchases = purchaseCalculator(current.platforms) + purchaseCalculator(res.platforms)
+        val result = new PurchasePerPlatform(p, updatedPurchases)
+        result
+      }
+      new PurchasePerUser(null, total, purchasesPerPlatforms.toList)
+    }
+  }
 }
+
+sealed case class AveragePurchaseUserPerPlatform(platform: String, value: Double)
+sealed case class AveragePurchaseUser(total: Double, platforms: List[AveragePurchaseUserPerPlatform])
 
 class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
   import context._
@@ -31,22 +66,33 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
   def inputCollectionType: String = "payingUsers"
   def outputCollectionType: String = "avgPurchasesUser"
 
+  private def averagePurchaseUserPerPlatformToBson(p: AveragePurchaseUserPerPlatform): MongoDBObject = {
+    MongoDBObject("platform" -> p.platform, "res" -> p.value)
+  }
+
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    result: Double,
-    end: Date,
+    result: AveragePurchaseUser,
     start: Date,
+    end: Date,
     companyName: String,
-    applicationName: String
+    applicationName: String,
+    platforms: List[String]
   ) = {
     val uri  = MongoClientURI(uriStr)
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
+    val platformResults = if(result.platforms.isEmpty) {
+      platforms.map {p => MongoDBObject("platform" -> p, "res" -> 0.0)}
+    } else {
+      result.platforms.map{averagePurchaseUserPerPlatformToBson(_)}
+    }
     val obj = MongoDBObject(
-      "avgPurchasesUser" -> result,
-      "lowerDate" -> start.getTime,
-      "upperDate" -> end.getTime
+      "total" -> result.total,
+      "platforms" -> platformResults,
+      "lowerDate" -> start,
+      "upperDate" -> end
     )
     collection.insert(obj)
     client.close
@@ -58,7 +104,8 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
@@ -67,56 +114,50 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val payingUsersRDD = sc.newAPIHadoopRDD(
-      jobConfig,
-      classOf[com.mongodb.hadoop.MongoInputFormat],
-      classOf[Object],
-      classOf[BSONObject]
-    ).filter((t: Tuple2[Object, BSONObject]) => {
-      def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
-      }
-      parseFloat(t._2.get("lowerDate").toString) match {
-        case Some(dbDate) => {
-          val startDate = new Date(dbDate)
-          startDate.compareTo(start) * end.compareTo(startDate) >= 0
-        }
-        case _ => false
-      }
-    })
+    val payingUsersRDD = filterRDDByDateFields(
+      ("lowerDate", "upperDate"),
+      sc.newAPIHadoopRDD(
+        jobConfig,
+        classOf[com.mongodb.hadoop.MongoInputFormat],
+        classOf[Object],
+        classOf[BSONObject]
+      ),
+      start,
+      end,
+      sc
+    )
 
-    if(payingUsersRDD.count > 0) {
-      val payingUsers = payingUsersRDD map {element =>
-        val purchases = (Json.parse(element._2.get("purchases").toString)).as[JsArray].value.size
-        (element._2.get("userId").toString, purchases)
-      }
-
-      val nrUsers = payingUsers.keys.count
-      val nrPurchases = payingUsers.values.reduce(_+_)
-      val result = if(nrUsers > 0) nrPurchases / nrUsers else 0
-      saveResultToDatabase(
-        ThorContext.URI,
-        getCollectionOutput(companyName, applicationName),
-        result,
-        start,
-        end,
-        companyName,
-        applicationName
+    val result = if(payingUsersRDD.count > 0) {
+      val payingUsers = AveragePurchasesUser.mapRDD(payingUsersRDD)
+      val purchases = AveragePurchasesUser.reduceRDD(payingUsers)
+      val nrUsers = payingUsers.count
+      new AveragePurchaseUser(
+        purchases.totalPurchases / nrUsers,
+        purchases.platforms.map{p =>new AveragePurchaseUserPerPlatform(p.platform, p.purchases / nrUsers)}
       )
-      promise.success()
-
     } else {
-      log.error("Count is zero")
-      promise.failure(new Exception)
+      log.info("Count is zero")
+      new AveragePurchaseUser(0.0, platforms map {new AveragePurchaseUserPerPlatform(_, 0.0)})
     }
 
+    saveResultToDatabase(
+      ThorContext.URI,
+      getCollectionOutput(companyName, applicationName),
+      result,
+      start,
+      end,
+      companyName,
+      applicationName,
+      platforms
+    )
+    promise.success()
     promise.future
-  }
-
+  }   
+      
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
       log.info(s"core job ended ${sender.toString}")
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
@@ -126,8 +167,9 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
           getCollectionOutput(companyName, applicationName),
           companyName,
           applicationName,
+          lower,
           upper,
-          lower
+          platforms
         ) map { arpu =>
           log.info("Job completed successful")
           onJobSuccess(companyName, applicationName, "Average Revenue Per Session")

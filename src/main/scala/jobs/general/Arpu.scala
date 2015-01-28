@@ -12,7 +12,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
@@ -29,86 +28,51 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "Arpu"
 
-  private def saveResultToDatabase(
-    uriStr: String,
-    collectionName: String,
-    arpu: Double,
-    end: Date,
-    start: Date,
-    companyName: String,
-    applicationName: String
-  ) = {
-    val uri  = MongoClientURI(uriStr)
-    val client = MongoClient(uri)
-    val collection = client.getDB(uri.database.get)(collectionName)
-    val obj = MongoDBObject(
-      "arpu" -> arpu,
-      "lowerDate" -> start.getTime,
-      "upperDate" -> end.getTime
-    )
-    collection.insert(obj)
-    client.close
-  }
-
   def executeJob(
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
-    val dateFields = ("lowerDate", "upperDate")
     val revCollName = s"${companyName}_TotalRevenue_${applicationName}"
     val activeCollName = s"${companyName}_activeUsers_${applicationName}"
-    val uri = MongoClientURI(ThorContext.URI)
-    val mongoClient = MongoClient(uri)
-    val revCollection = mongoClient(uri.database.getOrElse("dev"))(revCollName)
-    val activeCollection = mongoClient(uri.database.getOrElse("dev"))(activeCollName)
-    
-    val query = (dateFields._1 $gte end.getTime $lte start.getTime) ++ (dateFields._2 $gte end.getTime $lte start.getTime)
-    val activeUsers = activeCollection.findOne(query).getOrElse(None)
-    val totalRevenue = revCollection.findOne(query).getOrElse(None)
 
-    (activeUsers, totalRevenue) match {
-      case (None, None) => {
-        log.info("cannot find elements")
-        promise.failure(new Exception)
-      }
-      case (active, revenue) => {
-        val a = (Json.parse(active.toString) \ "activeUsers").as[Int]
-        val r = (Json.parse(revenue.toString) \ "totalRevenue").as[Double]
-        val arpu = if(a > 0) r / a else 0
-        
-        saveResultToDatabase(
-          ThorContext.URI,
-          getCollectionOutput(companyName, applicationName),
-          arpu,
-          start,
-          end,
-          companyName,
-          applicationName
-        )
-        promise.success()
-      }
+    val optRevenue = getResultsByDateRange(revCollName, start, end)
+    val optActive = getResultsByDateRange(activeCollName, start, end)
+
+    val results = (optRevenue, optActive) match {
+      case (Some(totalRevenue), Some(activeUsers)) => {
+        val arpu = if(activeUsers.result > 0) totalRevenue.result / activeUsers.result else 0
+        val platformResults = (totalRevenue.platforms zip activeUsers.platforms).sorted map {p =>
+          val pArpu = if(p._2.res > 0) p._1.res / p._2.res else 0
+          new PlatformResults(p._1.platform, pArpu)
+        }
+        new Results(arpu, platformResults, start, end)      
+      } 
+      case _ => {
+        log.info("One of collections is empty")
+        new Results(0.0, platforms map {new PlatformResults(_, 0.0)}, start, end)
+      } 
     }
-
-    mongoClient.close
-
+    saveResultToDatabase(ThorContext.URI, getCollectionOutput(companyName, applicationName), results)
+    promise.success()
     promise.future
   }
 
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
       log.info(s"core job ended ${sender.toString}")
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, upper, lower) map { arpu =>
+        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
           log.info("Job completed successful")
-          ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper)
+          ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper, platforms)
           onJobSuccess(companyName, applicationName, "Arpu")
         } recover {
           case ex: Exception => onJobFailure(ex, "Arpu")

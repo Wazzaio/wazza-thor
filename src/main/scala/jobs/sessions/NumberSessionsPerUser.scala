@@ -1,11 +1,10 @@
 package wazza.thor.jobs
 
-import com.mongodb.BasicDBObject
-import com.mongodb.MongoClient
-import com.mongodb.MongoClientURI
+import com.mongodb.casbah.Imports._
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
+import scala.collection.mutable.ListBuffer
 import scala.util.Try
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
@@ -14,7 +13,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, Props, ActorRef}
 import scala.collection.mutable.ArrayBuffer
 import play.api.libs.json.JsValue
@@ -29,6 +27,11 @@ object NumberSessionsPerUser {
   def props(ctx: SparkContext, dependants: List[ActorRef]): Props = Props(new NumberSessionsPerUser(ctx, dependants))
 }
 
+sealed case class NrSessionsPerUser(userId: String, nrSessions: Int)
+sealed case class PlatformNrSessionsPerUser(platform: String, sessionsPerUser: List[NrSessionsPerUser])
+sealed case class PlatformSessions(platform: String, sessions: Int)
+sealed case class SessionsPerUserResult(userId: String, total: Int, platforms: List[PlatformSessions])
+
 class NumberSessionsPerUser(
   ctx: SparkContext,
   d: List[ActorRef]
@@ -40,41 +43,38 @@ class NumberSessionsPerUser(
   def inputCollectionType: String = "mobileSessions"
   def outputCollectionType: String = "numberSessionsPerUser"
 
+  private def platformSessionToBson(platformSession: PlatformSessions): MongoDBObject = {
+    MongoDBObject(
+      "platform" -> platformSession.platform,
+      "sessions" -> platformSession.sessions
+    )
+  }
+
+  private def sessionsPerUserResultToBson(result: SessionsPerUserResult): MongoDBObject = {
+    MongoDBObject(
+      "userId" -> result.userId,
+      "total" -> result.total,
+      "platforms" -> result.platforms.map{platformSessionToBson(_)}
+    )
+  }
+
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    nrSessionsPerUser: List[(String,Int)],
+    nrSessionsPerUser: List[SessionsPerUserResult],
     lowerDate: Date,
     upperDate: Date
   ) = {
-    val promise = Promise[Unit]
-    val lst = new java.util.ArrayList[BasicDBObject](nrSessionsPerUser map {el =>
-      val obj = new BasicDBObject()
-      obj.put("user",el._1.toString)
-      obj.put("nrSessions", el._2.toInt)
-      obj
-    })
-    Future {
-      try {
-        val uri  = new MongoClientURI(uriStr)
-        val client = new MongoClient(uri)
-        val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
-        val result = new BasicDBObject
-        result.put("nrSessionsPerUser", lst)
-        result.put("lowerDate", lowerDate.getTime)
-        result.put("upperDate", upperDate.getTime)
-        collection.insert(result)
-        client.close
-        promise.success()
-      } catch {
-        case ex: Exception => {
-          log.error("Error saving data - " + ex.getMessage)
-          promise.failure(ex)
-        }
-      }
-    }
-
-    promise.future
+    val uri = MongoClientURI(uriStr)
+    val client = MongoClient(uri)
+    val collection = client.getDB(uri.database.get).getCollection(collectionName)
+    val model = MongoDBObject(
+      "nrSessionsPerUser" -> (nrSessionsPerUser map {sessionsPerUserResultToBson(_)}),
+      "lowerDate" -> lowerDate,
+      "upperDate" -> upperDate
+    )
+    collection.insert(model)
+    client.close()
   }
 
   private def executeJob(
@@ -83,7 +83,8 @@ class NumberSessionsPerUser(
     lowerDate: Date,
     upperDate: Date,
     companyName: String,
-    applicationName: String
+    applicationName: String,
+    platforms: List[String]
   ): Future[Unit] = {
 
     val promise = Promise[Unit]
@@ -95,54 +96,69 @@ class NumberSessionsPerUser(
     jobConfig.set("mongo.output.uri", outputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-    val mongoRDD = ctx.newAPIHadoopRDD(
+    val rdd = ctx.newAPIHadoopRDD(
       jobConfig,
       classOf[com.mongodb.hadoop.MongoInputFormat],
       classOf[Object],
       classOf[BSONObject]
-    ).filter((t: Tuple2[Object, BSONObject]) => {
-      def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
-      }
+    )
 
-      parseFloat(t._2.get("startTime").toString) match {
-        case Some(dbDate) => {
-          val startDate = new Date(dbDate)
-          startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
-        }
-        case _ => false
-       }
-    })
+    val rdds = getRDDPerPlatforms("startTime", platforms, rdd, lowerDate, upperDate, ctx)
 
-    val count = mongoRDD.count()
-    if(count > 0) {
-      var b = false
-      val numberSessionsPerUser = mongoRDD.map(arg => {
-        (arg._2.get("userId").toString, 1)
-      }).reduceByKey(_ + _).collect.toList
-
-      val dbResult = saveResultToDatabase(ThorContext.URI,
-        outputCollection,
-        numberSessionsPerUser,
-        lowerDate,
-        upperDate
-      )
-      dbResult onComplete {
-        case Success(_) => promise.success()
-        case Failure(ex) => promise.failure(ex)
-      }
-    } else {
-      log.error("count is zero")
-      promise.failure(new Exception())
+    val platformResults = rdds map {rdd =>
+      val numberSessionsPerUser = if(rdd._2.count() > 0) {
+        rdd._2.map(arg => {
+          (arg._2.get("userId").toString, 1)
+        }).reduceByKey(_ + _).map{r =>
+          new NrSessionsPerUser(r._1, r._2)
+        }.collect.toList
+      } else Nil
+      new PlatformNrSessionsPerUser(rdd._1, numberSessionsPerUser)
     }
 
+    val results = if(!platformResults.isEmpty) {
+      platformResults.foldLeft(List.empty[SessionsPerUserResult]){(lst, element) => {
+        var buffer: ListBuffer[SessionsPerUserResult] = lst.to[ListBuffer]
+        for(spu <- element.sessionsPerUser) {
+          if(!buffer.exists(_.userId == spu.userId)) {
+            buffer += new SessionsPerUserResult(
+              spu.userId,
+              spu.nrSessions,
+              List(new PlatformSessions(element.platform, spu.nrSessions))
+            )
+          } else {
+            val oldInfo = buffer.find(_.userId == spu.userId).get
+            val newTotal = oldInfo.total + spu.nrSessions
+            val updatedPlatforms = {
+              // If no element exists for this platform, create it
+              if(!oldInfo.platforms.exists(_.platform == element.platform)) {
+                oldInfo.platforms :+ (new PlatformSessions(element.platform, spu.nrSessions))
+              } else {
+                // If an element exists, update it
+                val platform = oldInfo.platforms.find(_.platform == element.platform).get
+                val updatedPlatform = new PlatformSessions(element.platform, platform.sessions + spu.nrSessions)
+                oldInfo.platforms.updated(oldInfo.platforms.indexOf(platform), updatedPlatform)
+              }
+            }
+            val updatedSessionsPerUserResult = new SessionsPerUserResult(spu.userId, newTotal, updatedPlatforms)
+            buffer.update(buffer.indexOf(oldInfo), updatedSessionsPerUserResult)
+          }
+        }
+        buffer.toList
+      }}     
+    } else {
+      List[SessionsPerUserResult]()
+    }
+
+    saveResultToDatabase(ThorContext.URI, outputCollection, results, lowerDate, upperDate)
+    promise.success()
     promise.future
   }
 
   def kill = stop(self)
 
   def receive = {
-    case InitJob(companyName ,applicationName, lowerDate, upperDate) => {
+    case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
       log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
       supervisor = sender
       executeJob(
@@ -151,10 +167,11 @@ class NumberSessionsPerUser(
         lowerDate,
         upperDate,
         companyName,
-        applicationName
+        applicationName,
+        platforms
       ) map {res =>
         log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Number Sessions Per User", lowerDate, upperDate)
+        onJobSuccess(companyName, applicationName, "Number Sessions Per User", lowerDate, upperDate, platforms)
       } recover {
         case ex: Exception => {
           log.error("Job failed")
@@ -173,3 +190,4 @@ class NumberSessionsPerUser(
     }
   }
 }
+

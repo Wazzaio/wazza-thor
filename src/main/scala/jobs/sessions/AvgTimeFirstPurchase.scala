@@ -12,7 +12,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorContext}
 import scala.collection.immutable.StringOps
 import wazza.thor.messages._
@@ -176,7 +175,8 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
     companyName: String,
     applicationName: String,
     start: Date,
-    end: Date
+    end: Date,
+    platforms: List[String]
   ): Future[Unit] = {
     val promise = Promise[Unit]
     def getNumberSecondsBetweenDates(d1: Date, d2: Date): Float = {
@@ -243,12 +243,12 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
       log.info(s"core job ended ${sender.toString}")
       updateCompletedDependencies(sender)
       if(dependenciesCompleted) {
         log.info("execute job")
-        executeJob(companyName, applicationName, upper, lower) map { arpu =>
+        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
           log.info("Job completed successful")
           onJobSuccess(companyName, applicationName, "Average Time First Purchase")
         } recover {

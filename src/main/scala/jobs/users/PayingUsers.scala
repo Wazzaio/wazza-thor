@@ -4,6 +4,7 @@ import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
+import org.apache.spark.rdd.RDD
 import scala.util.Try
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
@@ -12,7 +13,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
-import ExecutionContext.Implicits.global
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.util.{Success,Failure}
 import scala.collection.JavaConversions._
@@ -22,14 +22,63 @@ import scala.collection.immutable.StringOps
 import wazza.thor.messages._
 import com.mongodb.casbah.Imports._
 import play.api.libs.json._
+import scala.collection.mutable._
 
 object PayingUsers {
   
   def props(ctx: SparkContext, d: List[ActorRef]): Props = Props(new PayingUsers(ctx, d))
+
+  def mapRDD(
+    rdd: RDD[Tuple2[Object, BSONObject]],
+    lowerDate: Date,
+    upperDate: Date,
+    platforms: List[String]
+  ): RDD[UserPurchases] = {
+    rdd.map(purchases => {
+      def parseDate(d: String): Option[Date] = {
+        try {
+          val Format = "E MMM dd HH:mm:ss Z yyyy"
+          Some(new SimpleDateFormat(Format).parse(d))
+        } catch {case _: Throwable => None }
+      }
+
+      val time = parseDate(purchases._2.get("time").toString)
+      val platform = (Json.parse(purchases._2.get("device").toString) \ "osType").as[String]
+      val info = new PurchaseInfo(purchases._2.get("id").toString, time.get, Some(platform))
+      (purchases._2.get("userId").toString, info)
+    }).groupByKey.map(purchaseInfo => {
+      val userId = purchaseInfo._1
+      val purchasesPerPlatform = platforms map {p =>
+        val platformPurchases = purchaseInfo._2.filter(_.platform match {
+          case Some(opt) => opt == p
+          case _ => false
+        }) map {pp =>
+          new PurchaseInfo(pp.purchaseId, pp.time)
+        }
+        new PlatformPurchases(p, platformPurchases.toList)
+      }
+
+      new UserPurchases(userId, purchaseInfo._2.toList, purchasesPerPlatform, lowerDate, upperDate)
+    })
+  }
 }
 
-case class PurchaseInfo(purchaseId: String, time: Float)
-sealed case class UserPurchases(userId: String, purchases: List[PurchaseInfo], lowerDate: Float, upperDate: Float)
+case class PlatformPurchases(platform: String, purchases: List[PurchaseInfo])
+
+case class PurchaseInfo(
+  purchaseId: String,
+  val time: Date,
+  platform: Option[String] = None
+) extends Ordered[PurchaseInfo] {
+  def compare(that: PurchaseInfo): Int = this.time.compareTo(that.time)
+}
+
+sealed case class UserPurchases(
+  userId: String,
+  totalPurchases: List[PurchaseInfo],
+  purchasesPerPlatform: List[PlatformPurchases],
+  lowerDate: Date, upperDate: Date
+)
 
 class PayingUsers(
   ctx: SparkContext,
@@ -43,25 +92,42 @@ class PayingUsers(
   override def outputCollectionType: String = "payingUsers"
 
   implicit def userPurchaseToBson(u: UserPurchases): DBObject = {
+    val purchasesPerPlatform = if(u.purchasesPerPlatform.isEmpty) {
+      List()
+    } else 
+      u.purchasesPerPlatform map {platformPurchaseToBson(_)}
+    
     MongoDBObject(
       "userId" -> u.userId,
-      "purchases" -> (u.purchases map {purchaseInfoToBson(_)}),
+      "purchases" -> (u.totalPurchases map {purchaseInfoToBson(_)}),
+      "purchasesPerPlatform" -> purchasesPerPlatform,
       "lowerDate" -> u.lowerDate,
       "upperDate" -> u.upperDate
     )
   }
 
-  implicit def purchaseInfoToBson(p: PurchaseInfo): MongoDBObject = {
+  implicit def platformPurchaseToBson(p: PlatformPurchases): MongoDBObject = {
     MongoDBObject(
-      "purchaseId" -> p.purchaseId,
-      "time" -> p.time
+      "platform" -> p.platform,
+      "purchases" -> (p.purchases map {purchaseInfoToBson(_)})
     )
+  }
+
+  implicit def purchaseInfoToBson(p: PurchaseInfo): MongoDBObject = {
+    val builder = MongoDBObject.newBuilder
+    builder += "purchaseId" -> p.purchaseId
+    builder += "time" -> p.time
+    p.platform match {
+      case Some(platform) => builder += "platform" -> platform
+      case None => {}
+    }
+    builder.result
   }
 
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    payingUsers: List[(String, List[PurchaseInfo])],
+    payingUsers: List[UserPurchases],
     lowerDate: Date,
     upperDate: Date
   ): Future[Unit] = {
@@ -71,10 +137,7 @@ class PayingUsers(
       val client = MongoClient(uri)
       try {
         val collection = client.getDB(uri.database.get)(collectionName)
-        payingUsers foreach {element =>
-          val pInfo = UserPurchases(element._1, element._2, lowerDate.getTime, upperDate.getTime)
-          collection.insert(pInfo)
-        }
+        payingUsers foreach {e => collection.insert(userPurchaseToBson(e))}
         client.close
         promise.success()
       } catch {
@@ -92,7 +155,8 @@ class PayingUsers(
      inputCollection: String,
      outputCollection: String,
      lowerDate: Date,
-     upperDate: Date
+     upperDate: Date,
+     platforms: List[String]
    ): Future[Unit] = {
 
      val promise = Promise[Unit]
@@ -104,67 +168,63 @@ class PayingUsers(
      jobConfig.set("mongo.output.uri", outputUri)
      jobConfig.set("mongo.input.split.create_input_splits", "false")
 
-     val mongoRDD = ctx.newAPIHadoopRDD(
+     val rdd = ctx.newAPIHadoopRDD(
        jobConfig,
        classOf[com.mongodb.hadoop.MongoInputFormat],
        classOf[Object],
        classOf[BSONObject]
-     ).filter((t: Tuple2[Object, BSONObject]) => {
-       def parseFloat(d: String): Option[Long] = {
-         try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
+     ).filter(t => {
+       def parseDate(d: String): Option[Date] = {
+         try {
+           val Format = "E MMM dd HH:mm:ss Z yyyy"
+           Some(new SimpleDateFormat(Format).parse(d))
+         } catch {case _: Throwable => None }
        }
-       parseFloat(t._2.get("time").toString) match {
-         case Some(dbDate) => {
-           val startDate = new Date(dbDate)
+
+       val dateStr = t._2.get("time").toString
+       parseDate(dateStr) match {
+         case Some(startDate) => {
            startDate.compareTo(lowerDate) * upperDate.compareTo(startDate) >= 0
          }
          case _ => false
        }
      })
 
-     if(mongoRDD.count > 0) {
-      val payingUsers = (mongoRDD.map(purchases => {
-        (
-          purchases._2.get("userId").toString,
-          PurchaseInfo(purchases._2.get("id").toString, purchases._2.get("time").toString.toFloat)
-        )
-      })).groupByKey.map(purchaseInfo => {
-        (purchaseInfo._1, purchaseInfo._2.toList.sortWith(_.time < _.time))
-      }).collect.toList
+     val result = if(rdd.count() > 0) {
+       PayingUsers.mapRDD(rdd, lowerDate, upperDate, platforms).collect.toList
+     } else {
+       List[UserPurchases]()
+     }
 
-       val dbResult = saveResultToDatabase(ThorContext.URI,
-         outputCollection,
-         payingUsers,
-         lowerDate,
-         upperDate
-       )
+     val dbResult = saveResultToDatabase(ThorContext.URI,
+       outputCollection,
+       result,
+       lowerDate,
+       upperDate
+     )
 
-      dbResult onComplete {
-        case Success(_) => promise.success()
-        case Failure(ex) => promise.failure(ex)
-      }
-    } else {
-      log.error("Count is zero")
-      promise.failure(new Exception)
-    }
-
+     dbResult onComplete {
+       case Success(_) => promise.success()
+       case Failure(ex) => promise.failure(ex)
+     }
     promise.future
   }
 
   def kill = stop(self)
 
   def receive = {
-    case InitJob(companyName, applicationName, lowerDate, upperDate) => {
+    case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
       log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
       supervisor = sender
       executeJob(
         getCollectionInput(companyName, applicationName),
         getCollectionOutput(companyName, applicationName),
         lowerDate,
-        upperDate
+        upperDate,
+        platforms
       ) map {res =>
         log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Paying Users", lowerDate, upperDate)
+        onJobSuccess(companyName, applicationName, "Paying Users", lowerDate, upperDate, platforms)
       } recover {
         case ex: Exception => {
           log.error("Job failed")
