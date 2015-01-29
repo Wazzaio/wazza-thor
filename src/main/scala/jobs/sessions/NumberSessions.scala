@@ -16,6 +16,8 @@ import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import akka.actor.{Actor, ActorLogging, Props, ActorRef}
 import scala.collection.immutable.StringOps
+import wazza.thor.NotificationMessage
+import wazza.thor.NotificationsActor
 import wazza.thor.messages._
 
 object NumberSessions {
@@ -82,21 +84,27 @@ class NumberSessions(
 
   def receive = {
     case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
-      log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
-      supervisor = sender
-      executeJob(
-        getCollectionInput(companyName, applicationName),
-        getCollectionOutput(companyName, applicationName),
-        lowerDate,
-        upperDate,
-        platforms
-      ) map {res =>
-        log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Number Sessions", lowerDate, upperDate, platforms)
-      } recover {
+      try {
+        log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
+        supervisor = sender
+        executeJob(
+          getCollectionInput(companyName, applicationName),
+          getCollectionOutput(companyName, applicationName),
+          lowerDate,
+          upperDate,
+          platforms
+        ) map {res =>
+          log.info("Job completed successful")
+          onJobSuccess(companyName, applicationName, "Number Sessions", lowerDate, upperDate, platforms)
+        } recover {
+          case ex: Exception => {
+            log.error("Job failed")
+            onJobFailure(ex, "Number Sessions")
+          }
+        }
+      } catch {
         case ex: Exception => {
-          log.error("Job failed")
-          onJobFailure(ex, "Number Sessions")
+          NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - NUMBER SESSIONS", ex.getStackTraceString)
         }
       }
     }

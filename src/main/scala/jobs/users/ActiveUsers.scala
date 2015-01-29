@@ -17,6 +17,8 @@ import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
+import wazza.thor.NotificationMessage
+import wazza.thor.NotificationsActor
 import wazza.thor.messages._
 
 object ActiveUsers {
@@ -101,21 +103,27 @@ class ActiveUsers(
 
   def receive = {
     case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
-      log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
-      supervisor = sender
-      executeJob(
-        getCollectionInput(companyName, applicationName),
-        getCollectionOutput(companyName, applicationName),
-        lowerDate,
-        upperDate,
-        platforms
-      ) map {res =>
-        log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Active Users", lowerDate, upperDate, platforms)
-      } recover {
+      try {
+        log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
+        supervisor = sender
+        executeJob(
+          getCollectionInput(companyName, applicationName),
+          getCollectionOutput(companyName, applicationName),
+          lowerDate,
+          upperDate,
+          platforms
+        ) map {res =>
+          log.info("Job completed successful")
+          onJobSuccess(companyName, applicationName, "Active Users", lowerDate, upperDate, platforms)
+        } recover {
+          case ex: Exception => {
+            log.error("Job failed")
+            onJobFailure(ex, "Active Users")
+          }
+        }
+      } catch {
         case ex: Exception => {
-          log.error("Job failed")
-          onJobFailure(ex, "Active Users")
+          NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - ACTIVE USERS", ex.getStackTraceString)
         }
       }
     }

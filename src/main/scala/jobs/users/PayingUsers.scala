@@ -19,6 +19,8 @@ import scala.collection.JavaConversions._
 import java.util.ArrayList
 import scala.collection.Iterable
 import scala.collection.immutable.StringOps
+import wazza.thor.NotificationMessage
+import wazza.thor.NotificationsActor
 import wazza.thor.messages._
 import com.mongodb.casbah.Imports._
 import play.api.libs.json._
@@ -214,21 +216,27 @@ class PayingUsers(
 
   def receive = {
     case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
-      log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
-      supervisor = sender
-      executeJob(
-        getCollectionInput(companyName, applicationName),
-        getCollectionOutput(companyName, applicationName),
-        lowerDate,
-        upperDate,
-        platforms
-      ) map {res =>
-        log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Paying Users", lowerDate, upperDate, platforms)
-      } recover {
+      try {
+        log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
+        supervisor = sender
+        executeJob(
+          getCollectionInput(companyName, applicationName),
+          getCollectionOutput(companyName, applicationName),
+          lowerDate,
+          upperDate,
+          platforms
+        ) map {res =>
+          log.info("Job completed successful")
+          onJobSuccess(companyName, applicationName, "Paying Users", lowerDate, upperDate, platforms)
+        } recover {
+          case ex: Exception => {
+            log.error("Job failed")
+            onJobFailure(ex, "Paying Users")
+          }
+        }
+      } catch {
         case ex: Exception => {
-          log.error("Job failed")
-          onJobFailure(ex, "Paying Users")
+          NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - PAYING USERS", ex.getStackTraceString)
         }
       }
     }
