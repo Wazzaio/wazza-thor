@@ -14,6 +14,8 @@ import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorContext}
 import scala.collection.immutable.StringOps
+import wazza.thor.NotificationMessage
+import wazza.thor.NotificationsActor
 import wazza.thor.messages._
 import com.mongodb.casbah.Imports._
 import play.api.libs.json._
@@ -244,15 +246,21 @@ class AvgTimeFirstPurchase(sc: SparkContext) extends Actor with ActorLogging  wi
 
   def receive = {
     case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
-      log.info(s"core job ended ${sender.toString}")
-      updateCompletedDependencies(sender)
-      if(dependenciesCompleted) {
-        log.info("execute job")
-        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
-          log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, "Average Time First Purchase")
-        } recover {
-          case ex: Exception => onJobFailure(ex, "Average Time First Purchase")
+      try {
+        log.info(s"core job ended ${sender.toString}")
+        updateCompletedDependencies(sender)
+        if(dependenciesCompleted) {
+          log.info("execute job")
+          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
+            log.info("Job completed successful")
+            onJobSuccess(companyName, applicationName, "Average Time First Purchase")
+          } recover {
+            case ex: Exception => onJobFailure(ex, "Average Time First Purchase")
+          }
+        }
+      } catch {
+        case ex: Exception => {
+          NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - AVG TIME 1ST PURCHASE", ex.getStackTraceString)
         }
       }
     }

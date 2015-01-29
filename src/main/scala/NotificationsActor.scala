@@ -2,6 +2,8 @@ package wazza.thor
 
 import akka.actor.Actor
 import akka.actor.ActorLogging
+import akka.actor.ActorRef
+import akka.actor.ActorSystem
 import akka.actor.Props
 import com.typesafe.config._
 import play.api.libs.json.Json
@@ -33,7 +35,7 @@ class NotificationsActor(apiKey: String, endpoint: String) extends Actor with Ac
       .header("Content-type", "application/json")
       .header("Chartset", "UTF-8")
       .option(HttpOptions.readTimeout(10000))
-      .execute
+      
   }
 
   def receive = {
@@ -74,6 +76,16 @@ object NotificationsActor {
       case Some(config) => new NotificationsActor(config.apiKey, config.endpoint)
       case _ => throw new Exception("Error occurred while initializing Mail worker")
     }
+  }
+
+  private var instance: ActorRef = null
+
+  def getInstance = {
+    if(instance == null) {
+      instance = ActorSystem("Nofications").actorOf(props, name = "Notification")
+    }
+
+    instance
   }
 
   def props: Props = Props(NotificationsActor.apply)

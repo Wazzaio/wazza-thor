@@ -14,6 +14,8 @@ import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
+import wazza.thor.NotificationMessage
+import wazza.thor.NotificationsActor
 import wazza.thor.messages._
 import com.mongodb.casbah.Imports._
 import play.api.libs.json.Json
@@ -66,16 +68,22 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
 
   def receive = {
     case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
-      log.info(s"core job ended ${sender.toString}")
-      updateCompletedDependencies(sender)
-      if(dependenciesCompleted) {
-        log.info("execute job")
-        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
-          log.info("Job completed successful")
-          ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper, platforms)
-          onJobSuccess(companyName, applicationName, "Arpu")
-        } recover {
-          case ex: Exception => onJobFailure(ex, "Arpu")
+      try {
+        log.info(s"core job ended ${sender.toString}")
+        updateCompletedDependencies(sender)
+        if(dependenciesCompleted) {
+          log.info("execute job")
+          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
+            log.info("Job completed successful")
+            ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper, platforms)
+            onJobSuccess(companyName, applicationName, "Arpu")
+          } recover {
+            case ex: Exception => onJobFailure(ex, "Arpu")
+          }
+        }
+      } catch {
+        case ex: Exception => {
+          NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - ARPU", ex.getStackTraceString)
         }
       }
     }

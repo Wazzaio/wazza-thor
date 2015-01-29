@@ -14,6 +14,8 @@ import org.apache.hadoop.conf.Configuration
 import scala.concurrent._
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import scala.collection.immutable.StringOps
+import wazza.thor.NotificationMessage
+import wazza.thor.NotificationsActor
 import wazza.thor.messages._
 import com.mongodb.casbah.Imports._
 import play.api.libs.json.Json
@@ -67,15 +69,21 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
 
   def receive = {
     case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
-      log.info(s"core job ended ${sender.toString}")
-      updateCompletedDependencies(sender)
-      if(dependenciesCompleted) {
-        log.info("execute job")
-        executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
-          log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, "Average Revenue Per Session")
-        } recover {
-          case ex: Exception => onJobFailure(ex, "Average Revenue Per Session")
+      try {
+        log.info(s"core job ended ${sender.toString}")
+        updateCompletedDependencies(sender)
+        if(dependenciesCompleted) {
+          log.info("execute job")
+          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
+            log.info("Job completed successful")
+            onJobSuccess(companyName, applicationName, "Average Revenue Per Session")
+          } recover {
+            case ex: Exception => onJobFailure(ex, "Average Revenue Per Session")
+          }
+        }
+      } catch {
+        case ex: Exception => {
+          NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - Avg Revenue Per Session", ex.getStackTraceString)
         }
       }
     }

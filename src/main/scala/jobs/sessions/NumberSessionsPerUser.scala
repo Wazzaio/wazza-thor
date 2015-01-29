@@ -20,6 +20,8 @@ import play.api.libs.json.Json
 import scala.collection.JavaConversions._
 import scala.util.{Success,Failure}
 import scala.collection.immutable.StringOps
+import wazza.thor.NotificationMessage
+import wazza.thor.NotificationsActor
 import wazza.thor.messages._
 
 object NumberSessionsPerUser {
@@ -159,23 +161,29 @@ class NumberSessionsPerUser(
 
   def receive = {
     case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
-      log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
-      supervisor = sender
-      executeJob(
-        getCollectionInput(companyName, applicationName),
-        getCollectionOutput(companyName, applicationName),
-        lowerDate,
-        upperDate,
-        companyName,
-        applicationName,
-        platforms
-      ) map {res =>
-        log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Number Sessions Per User", lowerDate, upperDate, platforms)
-      } recover {
+      try {
+        log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
+        supervisor = sender
+        executeJob(
+          getCollectionInput(companyName, applicationName),
+          getCollectionOutput(companyName, applicationName),
+          lowerDate,
+          upperDate,
+          companyName,
+          applicationName,
+          platforms
+        ) map {res =>
+          log.info("Job completed successful")
+          onJobSuccess(companyName, applicationName, "Number Sessions Per User", lowerDate, upperDate, platforms)
+        } recover {
+          case ex: Exception => {
+            log.error("Job failed")
+            onJobFailure(ex, "Number Sessions Per User")
+          }
+        }
+      } catch {
         case ex: Exception => {
-          log.error("Job failed")
-          onJobFailure(ex, "Number Sessions Per User")
+          NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - NUMBER SESSIONS USER", ex.getStackTraceString)
         }
       }
     }

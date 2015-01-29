@@ -16,6 +16,8 @@ import scala.collection.mutable.ListBuffer
 import scala.concurrent._
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props, ActorRef}
 import scala.collection.immutable.StringOps
+import wazza.thor.NotificationMessage
+import wazza.thor.NotificationsActor
 import wazza.thor.messages._
 import akka.actor.PoisonPill
 
@@ -98,21 +100,27 @@ class TotalRevenue(
     case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
       log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
       supervisor = sender
-      executeJob(
-        getCollectionInput(companyName, applicationName),
-        getCollectionOutput(companyName, applicationName),
-        lowerDate,
-        upperDate,
-        companyName,
-        applicationName,
-        platforms
-      ) map {res =>
-        log.info("Job completed successful")
-        onJobSuccess(companyName, applicationName, "Total Revenue", lowerDate, upperDate, platforms)
-      } recover {
+      try {
+        executeJob(
+          getCollectionInput(companyName, applicationName),
+          getCollectionOutput(companyName, applicationName),
+          lowerDate,
+          upperDate,
+          companyName,
+          applicationName,
+          platforms
+        ) map {res =>
+          log.info("Job completed successful")
+          onJobSuccess(companyName, applicationName, "Total Revenue", lowerDate, upperDate, platforms)
+        } recover {
+          case ex: Exception => {
+            log.error("Job failed")
+            onJobFailure(ex, "Total Revenue")
+          }
+        }
+      } catch {
         case ex: Exception => {
-          log.error("Job failed")
-          onJobFailure(ex, "Total Revenue")
+          NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - TOTAL REVENUE", ex.getStackTraceString)
         }
       }
     }
