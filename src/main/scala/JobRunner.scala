@@ -1,5 +1,8 @@
 package wazza.thor
+
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import org.quartz.Job
+import org.quartz.JobExecutionContext
 import wazza.thor.jobs._
 import org.apache.spark._
 import org.joda.time.DateMidnight
@@ -17,11 +20,10 @@ import org.joda.time.DurationFieldType
 import org.joda.time.DateTime
 import wazza.thor.messages._
 
-object JobRunner extends App {
+class JobRunner extends Job {
 
-  lazy val system = ActorSystem("analytics")
-
-  def initSpark(): SparkContext = {
+  lazy val system = ActorSystem("ThoR")
+  lazy val sc = {
     val conf = new SparkConf()
       .setAppName("Wazza Analytics")
       .setMaster("local")
@@ -29,64 +31,68 @@ object JobRunner extends App {
     new SparkContext(conf)
   }
 
-  lazy val sc = initSpark
-
-  case class Company(name: String, apps: List[String])
+  case class Apps(name: String, platforms: List[String])
+  case class Company(name: String, apps: List[Apps])
 
   private def getCompanies = {
     val CompaniesCollectionName = "companiesData"
     val uri = new MongoClientURI(ThorContext.URI)
     val client = new MongoClient(uri)
     val collection = client.getDB(uri.getDatabase()).getCollection(CompaniesCollectionName)
-    collection.find.toArray.asScala.map {obj =>
+    val companies = collection.find.toArray.asScala.map {obj =>
       val json = Json.parse(obj.toString)
-      new Company(
-        (json \ "name").as[String],
-        (json \ "apps").as[List[String]]
-      )
+      val companyName = (json \ "name").as[String]
+      val apps = (json \ "apps").as[List[String]] map {app =>
+        val collName = s"${companyName}_apps_${app}"
+        val appCollection = client.getDB(uri.getDatabase()).getCollection(collName)
+        val appInfo = Json.parse(appCollection.findOne.toString)
+        new Apps(app, (appInfo \ "appType").as[List[String]])
+      }
+      new Company(companyName, apps)
     }
+    client.close
+    companies
   }
 
   private def runTestMode(companyName: String, applicationName: String): Unit = {
-    ThorContext.URI = "mongodb://wazza-db-dev.cloudapp.net:27017/dev"
+    ThorContext.URI = "mongodb://localhost:27017/dev"//"mongodb://wazza-db-dev.cloudapp.net:27017/dev"
     val end = new LocalDate()
     val start = end.minusDays(7)
-    val days = Days.daysBetween(start, end).getDays()+1
-    List.range(0, days) foreach {index =>
-      val currentDay = start.withFieldAdded(DurationFieldType.days(), index)
-      val nextDay = currentDay.plusDays(1)
-      println(s"CURRENT DAY $currentDay")
-      for {
-        c <- List(companyName)
-        app <- List(applicationName)
-      } {
-        val dayId = currentDay.toString.replaceAll("-","")
-        val supervisorName = s"${c}_supervisor_${app}_${dayId}".replace(' ','.')
-        system.actorOf(Supervisor.props(c, app, currentDay.toDate, nextDay.toDate, system, sc) , name = supervisorName)
+    val days = 1//Days.daysBetween(start, end).getDays()+1
+      List.range(0, days) foreach {index =>
+        val currentDay = start.withFieldAdded(DurationFieldType.days(), index)
+        val nextDay = currentDay.plusDays(1)
+        println(s"CURRENT DAY $currentDay")
+        for {
+          c <- List(companyName)
+          app <- List(applicationName)
+        } {
+          val dayId = currentDay.toString.replaceAll("-","")
+          val supervisorName = s"${c}_supervisor_${app}_${dayId}".replace(' ','.')
+          system.actorOf(Supervisor.props(c, app, List("Android", "iOS"), currentDay.toDate, nextDay.toDate, system, sc) , name = supervisorName)
+        }
       }
-    }
   }
 
-  override def main(args: Array[String]): Unit = {
-    def parseEncodedString(str: String): String = {
-      str.replaceAll("%20", " ")
+  def execute(context: JobExecutionContext) = {
+    println("JOB RUNNER starting at: " + context.getFireTime())
+    val upper = new DateTime().withTimeAtStartOfDay
+    val lower = upper.minusDays(1)
+    for {
+      c <- getCompanies
+      app <- c.apps
+    } {
+      val supervisorName = s"${c.name}_supervisor_${app}".replace(' ','.')
+      system.actorOf(Supervisor.props(
+        c.name,
+        app.name,
+        app.platforms,
+        lower.toDate,
+        upper.toDate,
+        system,
+        sc
+      ), name = supervisorName)
     }
-    
-    if(args.size == 2) {
-      val companyName = args.head.replaceAll("%20", " ")
-      val applicationName = args.last.replaceAll("%20", " ")
-      runTestMode(companyName, applicationName)
-
-    } else {
-      val lower = new DateMidnight()
-      val upper = lower.plusDays(1)
-      for {
-        c <- getCompanies
-        app <- c.apps
-      } {
-        val supervisorName = s"${c.name}_supervisor_${app}".replace(' ','.')
-        system.actorOf(Supervisor.props(c.name, app, lower.toDate, upper.toDate, system, sc) , name = supervisorName)
-      }
-    }
-	}
+  }
 }
+
