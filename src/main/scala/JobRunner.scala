@@ -20,41 +20,6 @@ import org.joda.time.DurationFieldType
 import org.joda.time.DateTime
 import wazza.thor.messages._
 
-object JobRunner extends App {
-
-
-  // override def main(args: Array[String]): Unit = {
-  //   def parseEncodedString(str: String): String = {
-  //     str.replaceAll("%20", " ")
-  //   }
-
-  //   if(args.size == 2) {
-  //     val companyName = args.head.replaceAll("%20", " ")
-  //     val applicationName = args.last.replaceAll("%20", " ")
-  //     runTestMode(companyName, applicationName)
-
-  //   } else {
-  //     // val lower = new DateMidnight()
-  //     // val upper = lower.plusDays(1)
-  //     // for {
-  //     //   c <- getCompanies
-  //     //   app <- c.apps
-  //     // } {
-  //     //   val supervisorName = s"${c.name}_supervisor_${app}".replace(' ','.')
-  //     //   system.actorOf(Supervisor.props(
-  //     //     c.name,
-  //     //     app.name,
-  //     //     app.platforms,
-  //     //     lower.toDate,
-  //     //     upper.toDate,
-  //     //     system,
-  //     //     sc
-  //     //   ), name = supervisorName)
-  //     // }
-  //   }
-	// }
-}
-
 class JobRunner extends Job {
 
   lazy val system = ActorSystem("ThoR")
@@ -111,7 +76,23 @@ class JobRunner extends Job {
 
   def execute(context: JobExecutionContext) = {
     println("JOB RUNNER starting at: " + context.getFireTime())
-    runTestMode("Wazza", "Test")
+    val upper = new DateTime().withTimeAtStartOfDay
+    val lower = upper.minusDays(1)
+    for {
+      c <- getCompanies
+      app <- c.apps
+    } {
+      val supervisorName = s"${c.name}_supervisor_${app}".replace(' ','.')
+      system.actorOf(Supervisor.props(
+        c.name,
+        app.name,
+        app.platforms,
+        lower.toDate,
+        upper.toDate,
+        system,
+        sc
+      ), name = supervisorName)
+    }
   }
 }
 
