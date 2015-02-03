@@ -1,8 +1,12 @@
 package wazza.thor
 
+import akka.actor.ActorRef
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import java.util.Date
 import org.quartz.Job
+import org.quartz.JobDataMap
 import org.quartz.JobExecutionContext
+import org.quartz.JobExecutionException
 import wazza.thor.jobs._
 import org.apache.spark._
 import org.joda.time.DateMidnight
@@ -54,44 +58,45 @@ class JobRunner extends Job {
     companies
   }
 
-  private def runTestMode(companyName: String, applicationName: String): Unit = {
-    ThorContext.URI = "mongodb://localhost:27017/dev"//"mongodb://wazza-db-dev.cloudapp.net:27017/dev"
-    val end = new LocalDate()
-    val start = end.minusDays(7)
-    val days = 1//Days.daysBetween(start, end).getDays()+1
-      List.range(0, days) foreach {index =>
-        val currentDay = start.withFieldAdded(DurationFieldType.days(), index)
-        val nextDay = currentDay.plusDays(1)
-        println(s"CURRENT DAY $currentDay")
-        for {
-          c <- List(companyName)
-          app <- List(applicationName)
-        } {
-          val dayId = currentDay.toString.replaceAll("-","")
-          val supervisorName = s"${c}_supervisor_${app}_${dayId}".replace(' ','.')
-          system.actorOf(Supervisor.props(c, app, List("Android", "iOS"), currentDay.toDate, nextDay.toDate, system, sc) , name = supervisorName)
-        }
-      }
+  protected def as[T](key: String)(implicit dataMap: JobDataMap): T = Option(dataMap.get(key)) match {
+    case Some(item) =>
+      // todo - more careful casting check?
+      item.asInstanceOf[T]
+    case None =>
+      throw new NoSuchElementException("No entry in JobDataMap for required entry '%s'".format(key))
   }
 
   def execute(context: JobExecutionContext) = {
-    println("JOB RUNNER starting at: " + context.getFireTime())
-    val upper = new DateTime().withTimeAtStartOfDay
-    val lower = upper.minusDays(1)
-    for {
-      c <- getCompanies
-      app <- c.apps
-    } {
-      val supervisorName = s"${c.name}_supervisor_${app}".replace(' ','.')
-      system.actorOf(Supervisor.props(
-        c.name,
-        app.name,
-        app.platforms,
-        lower.toDate,
-        upper.toDate,
-        system,
-        sc
-      ), name = supervisorName)
+    try {
+      implicit val dataMap = context.getJobDetail.getJobDataMap
+      val thor = as[ActorRef]("ThorRef")
+      val upper = as[Date]("upper")
+      val lower = as[Date]("lower")
+      println("JOB RUNNER starting at: " + context.getFireTime())
+      println("LOWER: " + lower + " | UPPER: " + upper)
+      for {
+        c <- getCompanies
+        app <- c.apps
+      } {
+        val supervisorName = s"${c.name}_supervisor_${app.name}".replace(' ','.')
+        println(s"supervisor name: ${supervisorName}")
+        system.actorOf(Supervisor.props(
+          c.name,
+          app.name,
+          app.platforms,
+          lower,
+          upper,
+          system,
+          sc,
+          thor
+        ), name = supervisorName)
+      }
+    } catch {
+      case ex: Exception => {
+        println("ERROR: " + ex.getStackTraceString)
+        val quartzException = new JobExecutionException(ex)
+        throw quartzException
+      }
     }
   }
 }
