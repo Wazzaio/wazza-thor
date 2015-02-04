@@ -186,6 +186,7 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
       platforms
     )
 
+    promise.success()
     promise.future
   }
 
