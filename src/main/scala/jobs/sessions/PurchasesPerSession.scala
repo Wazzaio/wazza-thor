@@ -169,7 +169,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
         PurchasesPerSession.mapPayingUsersRDD(payingUsersRDD, platforms), platforms
       )
     } else {
-      log.error("Count is zero")
+      log.info("Count is zero")
       PurchasePerUser.apply
     }
   }
@@ -198,7 +198,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
         PurchasesPerSession.mapSessionsRDD(sessionsRDD, platforms), platforms
       )
     } else {
-      log.error("empty session collection")
+      log.info("empty session collection")
       NrSessions.apply
     }
   }
@@ -263,14 +263,16 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
           log.info("execute job")
           executeJob(companyName, applicationName, upper, lower, platforms) map { arpu =>
             log.info("Job completed successful")
-            onJobSuccess(companyName, applicationName, "Average Purchases Per Session")
+            onJobSuccess(companyName, applicationName, self.path.name)
           } recover {
-            case ex: Exception => onJobFailure(ex, "Average Purchases Per Session")
+            case ex: Exception => onJobFailure(ex, self.path.name)
           }
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - PURCHASES PER SESSION", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }

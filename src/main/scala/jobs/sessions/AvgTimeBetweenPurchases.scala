@@ -207,7 +207,9 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - AVG TIME BETWEEN PURCHASES", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }

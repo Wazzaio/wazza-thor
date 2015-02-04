@@ -83,7 +83,9 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - ARPU", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }

@@ -253,14 +253,16 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
           log.info("execute job")
           executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
             log.info("Job completed successful")
-            onJobSuccess(companyName, applicationName, "LTV")
+            onJobSuccess(companyName, applicationName, self.path.name)
           } recover {
-            case ex: Exception => onJobFailure(ex, "LTV")
+            case ex: Exception => onJobFailure(ex, self.path.name)
           }
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - LIFE TIME VALUE", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }

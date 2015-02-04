@@ -104,7 +104,9 @@ class NumberSessions(
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - NUMBER SESSIONS", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }
@@ -113,7 +115,7 @@ class NumberSessions(
       childJobsCompleted = childJobsCompleted :+ jobType
       if(childJobsCompleted.size == dependants.size) {
         log.info("All child jobs have finished")
-        supervisor ! JobCompleted(jobType, new wazza.thor.messages.Success)
+        supervisor ! new JobCompleted(self.path.name, new wazza.thor.messages.Success)
         kill
       }
     }
