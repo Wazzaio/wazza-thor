@@ -114,8 +114,8 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     uriStr: String,
     collectionName: String,
     result: PurchasesPerSessionResult,
-    end: Date,
     start: Date,
+    end: Date,
     companyName: String,
     applicationName: String,
     platforms: List[String]
@@ -243,12 +243,13 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       ThorContext.URI,
       getCollectionOutput(companyName, applicationName),
       new PurchasesPerSessionResult(totalResult, resultPlatforms),
-      end,
       start,
+      end,
       companyName,
       applicationName,
       platforms
     )
+    promise.success()
     promise.future
   }
 
@@ -261,7 +262,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
         updateCompletedDependencies(sender)
         if(dependenciesCompleted) {
           log.info("execute job")
-          executeJob(companyName, applicationName, upper, lower, platforms) map { arpu =>
+          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
             log.info("Job completed successful")
             onJobSuccess(companyName, applicationName, self.path.name)
           } recover {

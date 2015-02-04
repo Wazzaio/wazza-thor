@@ -245,7 +245,6 @@ class PayingUsers(
     /** Must wait for all childs to finish **/
     case JobCompleted(jobType, status) => {
       childJobsCompleted = jobType :: childJobsCompleted
-      log.info(s"CHILD JOBS COMPLETED ${childJobsCompleted}\nPAYING USERS CHILD JOBS: " + dependants.map(_.path.name).diff(childJobsCompleted).toString)
       if(childJobsCompleted.size == dependants.size) {
         log.info("All child jobs have finished")
         supervisor ! new JobCompleted(self.path.name, new wazza.thor.messages.Success)

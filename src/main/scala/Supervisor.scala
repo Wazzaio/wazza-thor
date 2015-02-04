@@ -131,14 +131,11 @@ class Supervisor(
     }
   }
 
-  log.info(s"AHOI ${self.path.name} is hara kiri")
-  thor ! new ThorMessage(self.path.name, end, true)
-  stop(self)
-  //initJobs()
+  initJobs()
 
   def receive = {
-    case JobCompleted(jobName, status) => {
-      results = JobCompleted(jobName, status) :: results
+    case j: JobCompleted => {
+      results = j :: results
       if(jobs.size == results.size) {
         log.info("All jobs have finished")
         thor ! new ThorMessage(self.path.name, new Date, true)

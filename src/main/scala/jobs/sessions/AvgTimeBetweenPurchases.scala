@@ -42,7 +42,7 @@ object AvgTimeBetweenPurchases {
         if(purchases.size > 1) {
           purchases.foldLeft(0.0){(acc, current) => {
             val index = current._2
-            if(index < purchases.size) {
+            if(index < purchases.size-1) {
               acc + getNumberSecondsBetweenDates(
                 parseDate(current._1, "time"),
                 parseDate(purchases(index+1)._1, "time")
