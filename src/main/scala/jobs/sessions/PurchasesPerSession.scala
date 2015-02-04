@@ -129,7 +129,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       result.platforms.map{PurchasesPerSessionPerPlatformToBson(_)}
     }
     val obj = MongoDBObject(
-      "total" -> result.total,
+      "result" -> result.total,
       "platforms" -> platformResults,
       "lowerDate" -> start,
       "upperDate" -> end

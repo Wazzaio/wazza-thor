@@ -1,8 +1,6 @@
 package wazza.thor.jobs
 
-import com.mongodb.BasicDBObject
-import com.mongodb.MongoClient
-import com.mongodb.MongoClientURI
+import com.mongodb.casbah.Imports._
 import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -44,13 +42,14 @@ class ActiveUsers(
     lowerDate: Date,
     upperDate: Date
   ) = {
-    val uri  = new MongoClientURI(uriStr)
-    val client = new MongoClient(uri)
-    val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
-    val result = new BasicDBObject
-    result.put("result", payingUsers)
-    result.put("lowerDate", lowerDate.getTime)
-    result.put("upperDate", upperDate.getTime)
+    val uri  = MongoClientURI(uriStr)
+    val client = MongoClient(uri)
+    val collection = client.getDB(uri.database.get)(collectionName)
+    val result = MongoDBObject(
+      "result" -> payingUsers,
+      "lowerDate" -> lowerDate,
+      "upperDate" -> upperDate
+    )
     collection.insert(result)
     client.close()
   }

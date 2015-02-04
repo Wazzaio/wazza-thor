@@ -29,7 +29,7 @@ object AvgTimeBetweenPurchases {
     rdd map {element =>
       def calculateSumTimeBetweenPurchases(lst: List[JsValue]): Double = {
         def getNumberSecondsBetweenDates(d1: Date, d2: Date): Float = {
-          (new LocalDate(d2).toDateTimeAtCurrentTime.getMillis - new LocalDate(d1).toDateTimeAtCurrentTime().getMillis) / 1000
+          Math.abs((new LocalDate(d2).toDateTimeAtCurrentTime.getMillis - new LocalDate(d1).toDateTimeAtCurrentTime().getMillis) / 1000)
         }
 
         def parseDate(json: JsValue, key: String): Date = {
@@ -109,7 +109,7 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
       result._2 map {el => MongoDBObject("platform" -> el._1, "res" -> el._2)}
     }
     val obj = MongoDBObject(
-      "total" -> result._1,
+      "result" -> result._1,
       "platforms" -> platformResults,
       "lowerDate" -> start,
       "upperDate" -> end

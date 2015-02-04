@@ -47,7 +47,7 @@ sealed case class LifeTimeValueResult(total: Double, platforms: List[LifeTimeVal
 object LifeTimeValueResult {
 
   implicit def toBSON(ltv: LifeTimeValueResult): MongoDBObject = {
-    MongoDBObject("total" -> ltv.total, "platforms" -> LifeTimeValuePlatformsResult.toListBSON(ltv.platforms))
+    MongoDBObject("result" -> ltv.total, "platforms" -> LifeTimeValuePlatformsResult.toListBSON(ltv.platforms))
   }
 
   def default(platforms: List[String]): LifeTimeValueResult = {
