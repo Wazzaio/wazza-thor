@@ -48,7 +48,7 @@ class ActiveUsers(
     val client = new MongoClient(uri)
     val collection = client.getDB(uri.getDatabase()).getCollection(collectionName)
     val result = new BasicDBObject
-    result.put("activeUsers", payingUsers)
+    result.put("result", payingUsers)
     result.put("lowerDate", lowerDate.getTime)
     result.put("upperDate", upperDate.getTime)
     collection.insert(result)

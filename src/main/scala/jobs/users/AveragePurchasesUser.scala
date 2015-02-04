@@ -91,7 +91,7 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
       result.platforms.map{averagePurchaseUserPerPlatformToBson(_)}
     }
     val obj = MongoDBObject(
-      "total" -> result.total,
+      "result" -> result.total,
       "platforms" -> platformResults,
       "lowerDate" -> start,
       "upperDate" -> end

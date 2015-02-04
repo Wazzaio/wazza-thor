@@ -1,6 +1,7 @@
 package wazza.thor
 
 import akka.actor.Actor
+import akka.actor.ActorLogging
 import akka.actor.ActorSystem
 import akka.actor.Props
 import java.util.Date
@@ -18,7 +19,7 @@ import org.quartz.impl.StdSchedulerFactory
 import scala.collection.JavaConverters._
 import wazza.thor.messages.ThorMessage
 
-class Thor(debug: Boolean, var dates: List[DateTime] = Nil) extends Actor {
+class Thor(debug: Boolean, var dates: List[DateTime] = Nil) extends Actor with ActorLogging {
 
   def createJob(args: Map[String, AnyRef] = Map()): JobDetail = {
     val upper = args.get("CURRENT_DAY") match {
@@ -70,6 +71,9 @@ class Thor(debug: Boolean, var dates: List[DateTime] = Nil) extends Actor {
 
   def receive = {
     case m: ThorMessage => {
+      log.info(s"Supervisor ${m.name} has ended")
+
+      //Shuts down jobrunner actor system
       if(debug && !dates.isEmpty) {
         dates = dates.drop(1)
         if(!dates.isEmpty) {
@@ -77,6 +81,7 @@ class Thor(debug: Boolean, var dates: List[DateTime] = Nil) extends Actor {
           val debugJob = createJob(args)
           val debugTrigger = createTrigger(debugJob)
           val jobKey = new JobKey("ThorJobRunner", "ThorGroup")
+          scheduler.interrupt(jobKey)
           scheduler.deleteJob(jobKey)
           scheduler.scheduleJob(debugJob, debugTrigger)
         }
@@ -86,7 +91,7 @@ class Thor(debug: Boolean, var dates: List[DateTime] = Nil) extends Actor {
 }
 
 object Thor extends App {
-  private lazy val DEFAULT_DAYS = 28
+  private lazy val DEFAULT_DAYS = 7
 
   val debugFlag = if(args.size == 1) args.head.asInstanceOf[String] == "true" else false
   val first = new LocalDate(new Date).withDayOfMonth(1)

@@ -80,7 +80,7 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
       LifeTimeValuePlatformsResult.toListBSON(result.platforms)
     }
     val obj = MongoDBObject(
-      "total" -> result.total,
+      "result" -> result.total,
       "platforms" -> platformResults,
       "lowerDate" -> start,
       "upperDate" -> end
