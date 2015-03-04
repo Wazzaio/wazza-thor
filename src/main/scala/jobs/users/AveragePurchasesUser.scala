@@ -91,7 +91,7 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
       result.platforms.map{averagePurchaseUserPerPlatformToBson(_)}
     }
     val obj = MongoDBObject(
-      "total" -> result.total,
+      "result" -> result.total,
       "platforms" -> platformResults,
       "lowerDate" -> start,
       "upperDate" -> end
@@ -175,14 +175,16 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
             platforms
           ) map { arpu =>
             log.info("Job completed successful")
-            onJobSuccess(companyName, applicationName, "Average Revenue Per Session")
+            onJobSuccess(companyName, applicationName, self.path.name)
           } recover {
-            case ex: Exception => onJobFailure(ex, "Average Revenue Per Session")
+            case ex: Exception => onJobFailure(ex, self.path.name)
           }
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - AVG PURCHASES USER", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }

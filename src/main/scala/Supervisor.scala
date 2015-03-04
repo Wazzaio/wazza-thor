@@ -17,9 +17,10 @@ object Supervisor {
     start: Date,
     end: Date,
     system: ActorSystem,
-    sc: SparkContext
+    sc: SparkContext,
+    thor: ActorRef
   ): Props = {
-    Props(new Supervisor(companyName, appName, platforms, start, end, system, sc))
+    Props(new Supervisor(companyName, appName, platforms, start, end, system, sc, thor))
   }
 }
 
@@ -30,7 +31,8 @@ class Supervisor(
   start: Date,
   end: Date,
   system: ActorSystem,
-  sc: SparkContext
+  sc: SparkContext,
+  thor: ActorRef
 ) extends Actor with ActorLogging {
   import context._
 
@@ -128,20 +130,22 @@ class Supervisor(
       jobActor ! InitJob(companyName, appName, platforms, start, end)
     }
   }
+
   initJobs()
 
   def receive = {
-    case JobCompleted(jobName, status) => {
-      results = JobCompleted(jobName, status) :: results
-      println(results)
+    case j: JobCompleted => {
+      results = j :: results
       if(jobs.size == results.size) {
-        //TODO save to DB
         log.info("All jobs have finished")
+        thor ! new ThorMessage(self.path.name, new Date, true)
         stop(self)
       }
     }
+
     case _ => {
       log.info("DEAD LETTER")
+      thor ! new ThorMessage(self.path.name, new Date, false)
       stop(self)
     }
   }

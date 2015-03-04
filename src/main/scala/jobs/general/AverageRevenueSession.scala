@@ -76,14 +76,16 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
           log.info("execute job")
           executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
             log.info("Job completed successful")
-            onJobSuccess(companyName, applicationName, "Average Revenue Per Session")
+            onJobSuccess(companyName, applicationName, self.path.name)
           } recover {
-            case ex: Exception => onJobFailure(ex, "Average Revenue Per Session")
+            case ex: Exception => onJobFailure(ex, self.path.name)
           }
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - Avg Revenue Per Session", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }

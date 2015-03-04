@@ -114,8 +114,8 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     uriStr: String,
     collectionName: String,
     result: PurchasesPerSessionResult,
-    end: Date,
     start: Date,
+    end: Date,
     companyName: String,
     applicationName: String,
     platforms: List[String]
@@ -129,7 +129,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       result.platforms.map{PurchasesPerSessionPerPlatformToBson(_)}
     }
     val obj = MongoDBObject(
-      "total" -> result.total,
+      "result" -> result.total,
       "platforms" -> platformResults,
       "lowerDate" -> start,
       "upperDate" -> end
@@ -169,7 +169,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
         PurchasesPerSession.mapPayingUsersRDD(payingUsersRDD, platforms), platforms
       )
     } else {
-      log.error("Count is zero")
+      log.info("Count is zero")
       PurchasePerUser.apply
     }
   }
@@ -198,7 +198,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
         PurchasesPerSession.mapSessionsRDD(sessionsRDD, platforms), platforms
       )
     } else {
-      log.error("empty session collection")
+      log.info("empty session collection")
       NrSessions.apply
     }
   }
@@ -243,12 +243,13 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       ThorContext.URI,
       getCollectionOutput(companyName, applicationName),
       new PurchasesPerSessionResult(totalResult, resultPlatforms),
-      end,
       start,
+      end,
       companyName,
       applicationName,
       platforms
     )
+    promise.success()
     promise.future
   }
 
@@ -261,16 +262,18 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
         updateCompletedDependencies(sender)
         if(dependenciesCompleted) {
           log.info("execute job")
-          executeJob(companyName, applicationName, upper, lower, platforms) map { arpu =>
+          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
             log.info("Job completed successful")
-            onJobSuccess(companyName, applicationName, "Average Purchases Per Session")
+            onJobSuccess(companyName, applicationName, self.path.name)
           } recover {
-            case ex: Exception => onJobFailure(ex, "Average Purchases Per Session")
+            case ex: Exception => onJobFailure(ex, self.path.name)
           }
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - PURCHASES PER SESSION", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }

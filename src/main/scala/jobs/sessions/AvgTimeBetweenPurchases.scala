@@ -29,7 +29,7 @@ object AvgTimeBetweenPurchases {
     rdd map {element =>
       def calculateSumTimeBetweenPurchases(lst: List[JsValue]): Double = {
         def getNumberSecondsBetweenDates(d1: Date, d2: Date): Float = {
-          (new LocalDate(d2).toDateTimeAtCurrentTime.getMillis - new LocalDate(d1).toDateTimeAtCurrentTime().getMillis) / 1000
+          Math.abs((new LocalDate(d2).toDateTimeAtCurrentTime.getMillis - new LocalDate(d1).toDateTimeAtCurrentTime().getMillis) / 1000)
         }
 
         def parseDate(json: JsValue, key: String): Date = {
@@ -42,7 +42,7 @@ object AvgTimeBetweenPurchases {
         if(purchases.size > 1) {
           purchases.foldLeft(0.0){(acc, current) => {
             val index = current._2
-            if(index < purchases.size) {
+            if(index < purchases.size-1) {
               acc + getNumberSecondsBetweenDates(
                 parseDate(current._1, "time"),
                 parseDate(purchases(index+1)._1, "time")
@@ -109,7 +109,7 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
       result._2 map {el => MongoDBObject("platform" -> el._1, "res" -> el._2)}
     }
     val obj = MongoDBObject(
-      "total" -> result._1,
+      "result" -> result._1,
       "platforms" -> platformResults,
       "lowerDate" -> start,
       "upperDate" -> end
@@ -186,6 +186,7 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
       platforms
     )
 
+    promise.success()
     promise.future
   }
 
@@ -207,7 +208,9 @@ class AvgTimeBetweenPurchases(sc: SparkContext) extends Actor with ActorLogging 
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - AVG TIME BETWEEN PURCHASES", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }

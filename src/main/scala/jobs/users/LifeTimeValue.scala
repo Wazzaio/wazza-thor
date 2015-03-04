@@ -47,7 +47,7 @@ sealed case class LifeTimeValueResult(total: Double, platforms: List[LifeTimeVal
 object LifeTimeValueResult {
 
   implicit def toBSON(ltv: LifeTimeValueResult): MongoDBObject = {
-    MongoDBObject("total" -> ltv.total, "platforms" -> LifeTimeValuePlatformsResult.toListBSON(ltv.platforms))
+    MongoDBObject("result" -> ltv.total, "platforms" -> LifeTimeValuePlatformsResult.toListBSON(ltv.platforms))
   }
 
   def default(platforms: List[String]): LifeTimeValueResult = {
@@ -80,7 +80,7 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
       LifeTimeValuePlatformsResult.toListBSON(result.platforms)
     }
     val obj = MongoDBObject(
-      "total" -> result.total,
+      "result" -> result.total,
       "platforms" -> platformResults,
       "lowerDate" -> start,
       "upperDate" -> end
@@ -253,14 +253,16 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
           log.info("execute job")
           executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
             log.info("Job completed successful")
-            onJobSuccess(companyName, applicationName, "LTV")
+            onJobSuccess(companyName, applicationName, self.path.name)
           } recover {
-            case ex: Exception => onJobFailure(ex, "LTV")
+            case ex: Exception => onJobFailure(ex, self.path.name)
           }
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - LIFE TIME VALUE", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }

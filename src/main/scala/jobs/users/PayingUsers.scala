@@ -227,25 +227,27 @@ class PayingUsers(
           platforms
         ) map {res =>
           log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, "Paying Users", lowerDate, upperDate, platforms)
+          onJobSuccess(companyName, applicationName, self.path.name, lowerDate, upperDate, platforms)
         } recover {
           case ex: Exception => {
             log.error("Job failed")
-            onJobFailure(ex, "Paying Users")
+            onJobFailure(ex, self.path.name)
           }
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - PAYING USERS", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }
     /** Must wait for all childs to finish **/
     case JobCompleted(jobType, status) => {
-      childJobsCompleted = childJobsCompleted :+ jobType
+      childJobsCompleted = jobType :: childJobsCompleted
       if(childJobsCompleted.size == dependants.size) {
         log.info("All child jobs have finished")
-        supervisor ! JobCompleted(jobType, new wazza.thor.messages.Success)
+        supervisor ! new JobCompleted(self.path.name, new wazza.thor.messages.Success)
         kill
       }
     }

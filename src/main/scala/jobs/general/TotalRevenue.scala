@@ -120,7 +120,9 @@ class TotalRevenue(
         }
       } catch {
         case ex: Exception => {
+          log.error(ex.getStackTraceString)
           NotificationsActor.getInstance ! new NotificationMessage("SPARK ERROR - TOTAL REVENUE", ex.getStackTraceString)
+          onJobFailure(ex, self.path.name)
         }
       }
     }
@@ -129,7 +131,7 @@ class TotalRevenue(
       childJobsCompleted = childJobsCompleted :+ jobType
       if(childJobsCompleted.size == dependants.size) {
         log.info("All child jobs have finished")
-        supervisor ! JobCompleted(jobType, new Success)
+        supervisor ! new JobCompleted(self.path.name, new wazza.thor.messages.Success)
         kill
       }
     }
