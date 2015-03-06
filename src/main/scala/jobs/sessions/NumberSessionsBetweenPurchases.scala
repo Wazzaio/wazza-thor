@@ -110,16 +110,20 @@ object NumberSessionsBetweenPurchases {
     platforms: List[String]
   ): Tuple2[Long, Tuple2[Double, List[Tuple2[String, Double]]]] = {
     val numberUsers = rdd.count
-    val summedResults = rdd.values.reduce{(acc, current) => {
-      val totalSessions = acc._1 + current._1
-      val platformData = platforms map {p =>
-        val accumPlatformData = acc._2.find(_._1 == p).get
-        val pData = current._2.find(_._1 == p).get
-        (p, accumPlatformData._2 + pData._2)
-      }
-      (totalSessions, platformData)
-    }}
-    (numberUsers, summedResults)
+    if(numberUsers > 0) {
+      val summedResults = rdd.values.reduce{(acc, current) => {
+        val totalSessions = acc._1 + current._1
+        val platformData = platforms map {p =>
+          val accumPlatformData = acc._2.find(_._1 == p).get
+          val pData = current._2.find(_._1 == p).get
+          (p, accumPlatformData._2 + pData._2)
+        }
+        (totalSessions, platformData)
+      }}
+      (numberUsers, summedResults)
+    } else {
+      (0, (0.0, platforms map {(_, 0.0)}))
+    }
   }
 }
 
