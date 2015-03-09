@@ -5,6 +5,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import org.apache.spark._
 import org.apache.spark.rdd.RDD
+import scala.util.Failure
+import scala.util.Success
 import scala.util.Try
 import org.apache.hadoop.conf.Configuration
 import org.bson.BSONObject
@@ -31,7 +33,7 @@ object NumberSessionsFirstPurchases {
     applicationName: String, 
     userIds: List[String], 
     platforms: List[String]
-  ): RDD[Tuple2[Double, List[Tuple2[String, Double]]]] = {
+  ): RDD[Tuple2[Double, List[Tuple3[String, Double, Int]]]] = {
 
     val collection = s"${companyName}_mUsers_${applicationName}"
     val inputUri = s"${ThorContext.URI}.${collection}"
@@ -90,10 +92,11 @@ object NumberSessionsFirstPurchases {
                 val platformValidation = (s \ "platform").as[String] == p
                 dateValidation && platformValidation
               })
-              (p, sessionsToPurchase.toDouble)
+              // Format: (platform, sessions, platformUser)
+              (p, sessionsToPurchase.toDouble, 1)
             }
             case None => {
-              (p, 0.0)
+              (p, 0.0, 1)
             }
           }
         }
@@ -123,7 +126,7 @@ object NumberSessionsFirstPurchases {
         }
         case _ => false
       }
-      if(!dateFilter /** DEBUG **/) {
+      if(dateFilter) {
         val purchasesFilter = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size == 1
         val platformsFilter = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray].value
           .filter(e => platforms.contains((e \ "platform").as[String]))
@@ -139,7 +142,6 @@ object NumberSessionsFirstPurchases {
       } else {
         false
       }
-      true
     }.map(_._2.get("userId").toString)
   }
 }
@@ -148,27 +150,52 @@ class NumberSessionsFirstPurchases(sc: SparkContext) extends Actor with ActorLog
   import context._
 
   def inputCollectionType: String = "payingUsers"
-  def outputCollectionType: String = "AvgTimeFirstPurchase"
+  def outputCollectionType: String = "NumberSessionsFirstPurchase"
 
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    result: Double,
+    result: Tuple2[Double, Tuple2[Double, List[Tuple3[String, Double, Int]]]],
     end: Date,
     start: Date,
     companyName: String,
-    applicationName: String
-  ) = {
-    val uri  = MongoClientURI(uriStr)
-    val client = MongoClient(uri)
-    val collection = client.getDB(uri.database.get)(collectionName)
-    val obj = MongoDBObject(
-      "avgTimeFirstPurchase" -> result,
-      "lowerDate" -> start.getTime,
-      "upperDate" -> end.getTime
-    )
-    collection.insert(obj)
-    client.close
+    applicationName: String,
+    platforms: List[String]
+  ): Try[Unit] = {
+    try {
+      val uri  = MongoClientURI(uriStr)
+      val client = MongoClient(uri)
+      val collection = client.getDB(uri.database.get)(collectionName)
+      val totalResult = if(result._1 > 0) result._1 / result._2._1 else 0.0
+      val platformResults = platforms map {p =>
+        result._2._2.find(_._1 == p) match {
+          case Some(platformValue) => {
+            val platformUsers = platformValue._3
+            val res = if(platformUsers > 0) platformValue._2 / platformUsers else 0.0
+            (p, platformUsers, res)
+          }
+          case None => (p, 0.0, 0)
+        }
+      }
+      val obj = MongoDBObject(
+        "result" -> totalResult,
+        "nrUsers" -> result._1,
+        "platforms" -> (platformResults map {p =>
+          MongoDBObject(
+            "platform" -> p._1,
+            "result" -> p._3,
+            "nrUsers" -> p._2
+          )
+        }),
+        "lowerDate" -> start,
+        "upperDate" -> end
+      )
+      collection.insert(obj)
+      client.close
+      new Success
+    } catch {
+      case e: Exception => new Failure(e)
+    }
   }
 
   def executeJob(
@@ -197,37 +224,54 @@ class NumberSessionsFirstPurchases(sc: SparkContext) extends Actor with ActorLog
       platforms
     )
 
-    if(firstTimePayingUsersIds.count > 0) {
-      println(firstTimePayingUsersIds.collect.toList)
+    val results: Tuple2[Double, Tuple2[Double, List[Tuple3[String, Double, Int]]]] = if(firstTimePayingUsersIds.count > 0) {
       val userData = NumberSessionsFirstPurchases.getNumberSessionsFirstPurchasePerUser(
         sc, companyName, applicationName,
         firstTimePayingUsersIds.collect.toList, platforms
       )
 
       val nrUsers = userData.count.toDouble
-      println(userData.collect.toList)
       val summedResults = userData.reduce{(acc, current) => {
         val total = acc._1 + current._1
         val platformData = platforms map {platform =>
-          def getPlatformValue(el: List[Tuple2[String, Double]]): Double = {
+          def getPlatformValue(el: List[Tuple3[String, Double, Int]]): Double = {
             el.find(p => p._1 == platform) match {
               case Some(v) => v._2
               case None => 0.0
             }
           }
+
+          def updatePlatformUsers(el: List[Tuple3[String, Double, Int]]): Int = {
+            el.find(p => p._1 == platform) match {
+              case Some(v) => v._3 +1
+              case None => 0
+            }
+          }
+
           val value = getPlatformValue(current._2)
           val platformAcc = getPlatformValue(acc._2)
-          (platform, value + platformAcc)
+          (platform, value + platformAcc, updatePlatformUsers(current._2))
         }
         (total, platformData)
       }}
-
-      println(summedResults)
-      promise.success()
+      (nrUsers, summedResults)
     } else {
       log.info("Count is zero")
-      //TODO default zero result
-      //promise.failure(new Exception)
+      (0.0, (0.0, platforms map{(_, 0.0,0)}))
+    }
+
+    saveResultToDatabase(
+      ThorContext.URI,
+      getCollectionOutput(companyName, applicationName),
+      results,
+      end,
+      start,
+      companyName,
+      applicationName,
+      platforms
+    ) match {
+      case Success(_) => promise.success()
+      case Failure(e) => promise.failure(e)
     }
     promise.future
   }
