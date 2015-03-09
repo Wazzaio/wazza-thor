@@ -3,8 +3,8 @@ package wazza.thor.messages
 import java.util.Date
 
 trait JobResult
-case class Success extends JobResult
-case class Failure(ex: Exception) extends JobResult
+case class WZSuccess extends JobResult
+case class WZFailure(ex: Exception) extends JobResult
 case class JobCompleted(jobName: String, status: JobResult)
 case class CoreJobCompleted(
   companyName: String,

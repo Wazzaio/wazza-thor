@@ -28,7 +28,7 @@ trait CoreJob extends WazzaActor {
   }
 
   def onJobFailure(ex: Exception, jobType: String) = {
-    supervisor ! JobCompleted(jobType, new Failure(ex))
+    supervisor ! JobCompleted(jobType, new WZFailure(ex))
     dependants.foreach{_ ! PoisonPill}
     kill
   }

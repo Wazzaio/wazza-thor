@@ -247,7 +247,7 @@ class PayingUsers(
       childJobsCompleted = jobType :: childJobsCompleted
       if(childJobsCompleted.size == dependants.size) {
         log.info("All child jobs have finished")
-        supervisor ! new JobCompleted(self.path.name, new wazza.thor.messages.Success)
+        supervisor ! new JobCompleted(self.path.name, new WZSuccess)
         kill
       }
     }

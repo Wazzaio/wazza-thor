@@ -134,7 +134,7 @@ class ActiveUsers(
       childJobsCompleted = childJobsCompleted :+ jobType
       if(childJobsCompleted.size == dependants.size) {
         log.info("All child jobs have finished")
-        supervisor ! new JobCompleted(self.path.name, new Success)
+        supervisor ! new JobCompleted(self.path.name, new WZSuccess)
         kill
       }
     }
