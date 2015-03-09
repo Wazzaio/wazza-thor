@@ -98,7 +98,7 @@ object Thor extends App {
   val days = DEFAULT_DAYS
   val dates = if(debugFlag) {
     List.range(0, days) map {index =>
-      first.withFieldAdded(DurationFieldType.days(), index).toDateTimeAtStartOfDay
+      first.plusDays(days).toDateTimeAtStartOfDay()
     }
   } else List()
 
