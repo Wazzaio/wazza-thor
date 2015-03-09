@@ -3,10 +3,12 @@ package wazza.thor
 import akka.actor.ActorRef
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import java.util.Date
+import org.quartz.InterruptableJob
 import org.quartz.Job
 import org.quartz.JobDataMap
 import org.quartz.JobExecutionContext
 import org.quartz.JobExecutionException
+import org.quartz.UnableToInterruptJobException
 import wazza.thor.jobs._
 import org.apache.spark._
 import org.joda.time.DateMidnight
@@ -24,14 +26,16 @@ import org.joda.time.DurationFieldType
 import org.joda.time.DateTime
 import wazza.thor.messages._
 
-class JobRunner extends Job {
+class JobRunner extends Job with InterruptableJob {
 
   lazy val system = ActorSystem("ThoR")
   lazy val sc = {
     val conf = new SparkConf()
       .setAppName("Wazza Analytics")
-      .setMaster("local")
-      .set("spark.scheduler.mode", "FAIR")
+      .setMaster("local")     
+      //.set("spark.scheduler.mode", "FAIR")
+      .set("spark.logConf", "true")
+      .set("spark.eventLog.enabled","true") //Spark UI
     new SparkContext(conf)
   }
 
@@ -64,6 +68,19 @@ class JobRunner extends Job {
       item.asInstanceOf[T]
     case None =>
       throw new NoSuchElementException("No entry in JobDataMap for required entry '%s'".format(key))
+  }
+
+  // this method is called by the scheduler
+  override def interrupt() {
+    try {
+      system.shutdown
+      Thread.currentThread.destroy()
+    } catch {
+      case e: Exception => {
+        val ex = new  UnableToInterruptJobException(e)
+        throw ex
+      }
+    }
   }
 
   def execute(context: JobExecutionContext) = {
