@@ -203,7 +203,8 @@ class NumberSessionsFirstPurchases(sc: SparkContext) extends Actor with ActorLog
     applicationName: String,
     start: Date,
     end: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
@@ -279,13 +280,13 @@ class NumberSessionsFirstPurchases(sc: SparkContext) extends Actor with ActorLog
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms, paymentSystems) => {
       try {
         log.info(s"core job ended ${sender.toString}")
         updateCompletedDependencies(sender)
         if(dependenciesCompleted) {
           log.info("execute job")
-          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
+          executeJob(companyName, applicationName, lower, upper, platforms, paymentSystems) map { arpu =>
             log.info("Job completed successful")
             onJobSuccess(companyName, applicationName, "Number Sessions First Purchase")
           } recover {

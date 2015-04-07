@@ -160,7 +160,7 @@ class NumberSessionsPerUser(
   def kill = stop(self)
 
   def receive = {
-    case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
+    case InitJob(companyName ,applicationName, platforms, paymentSystems, lowerDate, upperDate) => {
       try {
         log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
         supervisor = sender
@@ -174,7 +174,7 @@ class NumberSessionsPerUser(
           platforms
         ) map {res =>
           log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, "Number Sessions Per User", lowerDate, upperDate, platforms)
+          onJobSuccess(companyName, applicationName, "Number Sessions Per User", lowerDate, upperDate, platforms, paymentSystems)
         } recover {
           case ex: Exception => {
             log.error("Job failed")

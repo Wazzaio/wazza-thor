@@ -44,7 +44,8 @@ class TotalRevenue(
     upperDate: Date,
     companyName: String,
     applicationName: String,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): Future[Unit] = {
 
     val promise = Promise[Unit]
@@ -70,11 +71,25 @@ class TotalRevenue(
     // Calculates results per platform
     val platformResults = rdds map {rdd =>
       if(rdd._2.count() > 0) {
-        val totalRevenue = rdd._2.map(arg => {
-          val price = arg._2.get("price").toString.toDouble
-          price
-        }).sum
-        new PlatformResults(rdd._1, totalRevenue)
+        // Filters only the entrances that match the selected payment systems
+        val filteredRDD = rdd._2.filter{el =>
+          paymentSystems.contains(el._2.get("paymentSystem").toString.toInt)
+        }
+
+        if(filteredRDD.count > 0) {
+          val totalRevenuePerPaymentSystem = rdd._2.map(arg => {
+            val paymentSystem = arg._2.get("paymentSystem").toString
+            val price = arg._2.get("price").toString.toDouble
+            (paymentSystem, price)
+          }).reduceByKey(_ + _)
+          val totalRevenue = totalRevenuePerPaymentSystem.values.reduce(_ + _)
+          val paymentSystemResults = totalRevenuePerPaymentSystem.collect.toList map {el =>
+            new PaymentSystemResult(el._1, el._2)
+          }
+          new PlatformResults(rdd._1, totalRevenue, Some(paymentSystemResults))
+        } else {
+          null
+        }
       } else {
         null
       }
@@ -84,10 +99,13 @@ class TotalRevenue(
     val results = if(!platformResults.exists(_ == null)) {
       val totalRevenue = platformResults.foldLeft(0.0)(_ + _.res)
       new Results(totalRevenue, platformResults, lowerDate, upperDate)
-      
     } else {
       log.info("Count is zero")
-      new Results(0.0, platforms map {new PlatformResults(_, 0.0)}, lowerDate, upperDate)
+      new Results(0.0,
+        platforms map {new PlatformResults(_, 0.0, Some(paymentSystems map {p => new PaymentSystemResult(p.toString, 0.0)}))},
+        lowerDate,
+        upperDate
+      )
     } 
     saveResultToDatabase(ThorContext.URI, outputCollection, results)
     promise.success()
@@ -97,7 +115,7 @@ class TotalRevenue(
   def kill = stop(self)
 
   def receive = {
-    case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
+    case InitJob(companyName ,applicationName, platforms, paymentSystems, lowerDate, upperDate) => {
       log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
       supervisor = sender
       try {
@@ -108,10 +126,11 @@ class TotalRevenue(
           upperDate,
           companyName,
           applicationName,
-          platforms
+          platforms,
+          paymentSystems
         ) map {res =>
           log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, "Total Revenue", lowerDate, upperDate, platforms)
+          onJobSuccess(companyName, applicationName, "Total Revenue", lowerDate, upperDate, platforms, paymentSystems)
         } recover {
           case ex: Exception => {
             log.error("Job failed")

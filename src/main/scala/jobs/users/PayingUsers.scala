@@ -34,7 +34,8 @@ object PayingUsers {
     rdd: RDD[Tuple2[Object, BSONObject]],
     lowerDate: Date,
     upperDate: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): RDD[UserPurchases] = {
     rdd.map(purchases => {
       def parseDate(d: String): Option[Date] = {
@@ -46,16 +47,21 @@ object PayingUsers {
 
       val time = parseDate(purchases._2.get("time").toString)
       val platform = (Json.parse(purchases._2.get("device").toString) \ "osType").as[String]
-      val info = new PurchaseInfo(purchases._2.get("id").toString, time.get, Some(platform))
+      val paymentSystem = purchases._2.get("paymentSystem").toString.toInt
+      val info = new PurchaseInfo(purchases._2.get("id").toString, time.get, Some(platform), paymentSystem)
       (purchases._2.get("userId").toString, info)
     }).groupByKey.map(purchaseInfo => {
       val userId = purchaseInfo._1
       val purchasesPerPlatform = platforms map {p =>
-        val platformPurchases = purchaseInfo._2.filter(_.platform match {
-          case Some(opt) => opt == p
-          case _ => false
+        val platformPurchases = purchaseInfo._2.filter(pInfo  => {
+          val platformPredicate = pInfo.platform match {
+            case Some(opt) => opt == p
+            case _ => false
+          }
+          val paymentSystemPredicate = paymentSystems.contains(pInfo.paymentSystem)
+          platformPredicate && paymentSystemPredicate
         }) map {pp =>
-          new PurchaseInfo(pp.purchaseId, pp.time)
+          new PurchaseInfo(pp.purchaseId, pp.time, None, pp.paymentSystem)
         }
         new PlatformPurchases(p, platformPurchases.toList)
       }
@@ -70,7 +76,8 @@ case class PlatformPurchases(platform: String, purchases: List[PurchaseInfo])
 case class PurchaseInfo(
   purchaseId: String,
   val time: Date,
-  platform: Option[String] = None
+  platform: Option[String] = None,
+  paymentSystem: Int
 ) extends Ordered[PurchaseInfo] {
   def compare(that: PurchaseInfo): Int = this.time.compareTo(that.time)
 }
@@ -119,6 +126,7 @@ class PayingUsers(
     val builder = MongoDBObject.newBuilder
     builder += "purchaseId" -> p.purchaseId
     builder += "time" -> p.time
+    builder += "paymentSystem" -> p.paymentSystem
     p.platform match {
       case Some(platform) => builder += "platform" -> platform
       case None => {}
@@ -158,7 +166,8 @@ class PayingUsers(
      outputCollection: String,
      lowerDate: Date,
      upperDate: Date,
-     platforms: List[String]
+     platforms: List[String],
+     paymentSystems: List[Int]
    ): Future[Unit] = {
 
      val promise = Promise[Unit]
@@ -193,7 +202,7 @@ class PayingUsers(
      })
 
      val result = if(rdd.count() > 0) {
-       PayingUsers.mapRDD(rdd, lowerDate, upperDate, platforms).collect.toList
+       PayingUsers.mapRDD(rdd, lowerDate, upperDate, platforms, paymentSystems).collect.toList
      } else {
        List[UserPurchases]()
      }
@@ -215,7 +224,7 @@ class PayingUsers(
   def kill = stop(self)
 
   def receive = {
-    case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
+    case InitJob(companyName ,applicationName, platforms, paymentSystems, lowerDate, upperDate) => {
       try {
         log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
         supervisor = sender
@@ -224,10 +233,11 @@ class PayingUsers(
           getCollectionOutput(companyName, applicationName),
           lowerDate,
           upperDate,
-          platforms
+          platforms,
+          paymentSystems
         ) map {res =>
           log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, self.path.name, lowerDate, upperDate, platforms)
+          onJobSuccess(companyName, applicationName, self.path.name, lowerDate, upperDate, platforms, paymentSystems)
         } recover {
           case ex: Exception => {
             log.error("Job failed")

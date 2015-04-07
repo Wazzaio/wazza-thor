@@ -39,7 +39,7 @@ class JobRunner extends Job with InterruptableJob {
     new SparkContext(conf)
   }
 
-  case class Apps(name: String, platforms: List[String])
+  case class Apps(name: String, platforms: List[String], paymentSystems: List[Int])
   case class Company(name: String, apps: List[Apps])
 
   private def getCompanies = {
@@ -54,7 +54,11 @@ class JobRunner extends Job with InterruptableJob {
         val collName = s"${companyName}_apps_${app}"
         val appCollection = client.getDB(uri.getDatabase()).getCollection(collName)
         val appInfo = Json.parse(appCollection.findOne.toString)
-        new Apps(app, (appInfo \ "appType").as[List[String]])
+        new Apps(
+          app,
+          (appInfo \ "appType").as[List[String]],
+          (appInfo \ "paymentSystems").as[List[Int]]
+        )
       }
       new Company(companyName, apps)
     }
@@ -101,6 +105,7 @@ class JobRunner extends Job with InterruptableJob {
           c.name,
           app.name,
           app.platforms,
+          app.paymentSystems,
           lower,
           upper,
           system,

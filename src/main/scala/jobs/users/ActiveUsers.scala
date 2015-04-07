@@ -85,9 +85,9 @@ class ActiveUsers(
         val activeUsers = rdd._2.map {arg => {
           (arg._2.get("userId"), 1)
         }}.groupByKey.count
-        new PlatformResults(rdd._1, activeUsers)
+        new PlatformResults(rdd._1, activeUsers, None)
       } else {
-        new PlatformResults(rdd._1, 0.0)
+        new PlatformResults(rdd._1, 0.0, None)
       }
     }
 
@@ -101,7 +101,7 @@ class ActiveUsers(
   def kill = stop(self)
 
   def receive = {
-    case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
+    case InitJob(companyName ,applicationName, platforms, paymentSystems, lowerDate, upperDate) => {
       try {
         log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
         supervisor = sender
@@ -113,7 +113,7 @@ class ActiveUsers(
           platforms
         ) map {res =>
           log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, self.path.name, lowerDate, upperDate, platforms)
+          onJobSuccess(companyName, applicationName, self.path.name, lowerDate, upperDate, platforms, paymentSystems)
         } recover {
           case ex: Exception => {
             log.error("Job failed")

@@ -7,6 +7,7 @@ import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.bson.BSONObject
 import play.api.libs.json.JsArray
+import play.api.libs.json.JsObject
 import play.api.libs.json.JsValue
 import play.api.libs.json.Json
 import com.mongodb.casbah.Imports._
@@ -111,10 +112,20 @@ trait WazzaActor {
       case Some(res) => {
         def parsePlatforms(arr: JsArray) = {
           arr.value map {(el: JsValue) =>
-            new PlatformResults(
-              (el \ "platform").as[String],
-              (el \ "res").as[Double]
-            )
+            val containsPaymentSystems = el.as[JsObject].keys.contains("paymentSystems")
+            if(containsPaymentSystems) {
+              new PlatformResults(
+                (el \ "platform").as[String],
+                (el \ "res").as[Double],
+                Some(paymentSystemsResultsFromJson((el \ "paymentSystems").as[JsArray].value.toList))
+              )
+            } else {
+              new PlatformResults(
+                (el \ "platform").as[String],
+                (el \ "res").as[Double],
+                None
+              )
+            }
           }
         }
 
@@ -134,7 +145,12 @@ trait WazzaActor {
     }
   }
 
-  protected case class PlatformResults(platform: String, res: Double) extends Ordered[PlatformResults] {
+  protected case class PaymentSystemResult(system: String, res: Double)
+  protected case class PlatformResults(
+    platform: String,
+    res: Double,
+    paymentSystems: Option[List[PaymentSystemResult]]
+  ) extends Ordered[PlatformResults] {
     def compare(that: PlatformResults): Int = {
       this.platform.compareTo(that.platform)
     }
@@ -146,10 +162,37 @@ trait WazzaActor {
     upperDate: Date
   )
 
+  protected def paymentSystemsResultsFromJson(jsonList: List[JsValue]): List[PaymentSystemResult] = {
+    jsonList map {json =>
+      new PaymentSystemResult((json \ "system").as[String], (json \ "res").as[Double])
+    }
+  }
+
+  protected def paymentSystemToMongo(paymentSystem: PaymentSystemResult): MongoDBObject = {
+    MongoDBObject(
+      "system" -> paymentSystem.system,
+      "res" -> paymentSystem.res
+    )
+  }
+
   protected def resultsToMongo(results: Results): MongoDBObject = {
+    def platformsToMongo = {
+      results.platforms map {p =>
+        val res = MongoDBObject(
+          "platform" -> p.platform,
+          "res" -> p.res
+        )
+        p.paymentSystems match {
+          case Some(paymentSystems) => {
+           res ++ MongoDBObject("paymentSystems" -> (paymentSystems map {paymentSystemToMongo(_)}))
+          }
+          case None => res
+        }
+      }
+    }
     MongoDBObject(
       "result" -> results.result,
-      "platforms" -> (results.platforms map {p => MongoDBObject("platform" -> p.platform, "res" -> p.res)}),
+      "platforms" -> platformsToMongo,
       "lowerDate" -> results.lowerDate,
       "upperDate" -> results.upperDate
     )

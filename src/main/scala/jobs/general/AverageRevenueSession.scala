@@ -35,7 +35,8 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
     applicationName: String,
     start: Date,
     end: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
@@ -50,13 +51,33 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
         val avgRevenueSessions = if(nrSessions.result > 0) totalRevenue.result / nrSessions.result else 0
         val platformResults = (totalRevenue.platforms zip nrSessions.platforms).sorted map {p =>
           val aAvgRevenueSessions = if(p._2.res > 0) p._1.res / p._2.res else 0
-          new PlatformResults(p._1.platform, aAvgRevenueSessions)
+          val paymentsResults = paymentSystems map {psys =>
+            val revPaymentSysOpt = p._1.paymentSystems.get.find(_.system.toInt == psys)
+            val nrSessionsPaymentSysOpt = p._2.paymentSystems.get.find(_.system.toInt == psys)
+              (revPaymentSysOpt, nrSessionsPaymentSysOpt) match {
+              case (Some(revPaymentSys), Some(nrSessionsPaymentSys)) => {
+                val resSys = if(nrSessionsPaymentSys.res > 0) revPaymentSys.res / nrSessionsPaymentSys.res else 0.0
+                new PaymentSystemResult(psys.toString, resSys)
+              }
+              case _ => {
+                new PaymentSystemResult(psys.toString, 0.0)
+              }
+            }
+            
+          }
+
+          new PlatformResults(p._1.platform, aAvgRevenueSessions, Some(paymentsResults))
         }
         new Results(avgRevenueSessions, platformResults, start, end)
       }
       case _ => {
         log.info("One of collections is empty")
-        new Results(0.0, platforms map {new PlatformResults(_, 0.0)}, start, end)
+        new Results(
+          0.0,
+          platforms map {new PlatformResults(_, 0.0, Some(paymentSystems map {p => new PaymentSystemResult(p.toString, 0.0)}))},
+          start,
+          end
+        )
       }
     }
 
@@ -68,13 +89,13 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms, paymentSystems) => {
       try {
         log.info(s"core job ended ${sender.toString}")
         updateCompletedDependencies(sender)
         if(dependenciesCompleted) {
           log.info("execute job")
-          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
+          executeJob(companyName, applicationName, lower, upper, platforms, paymentSystems) map { arpu =>
             log.info("Job completed successful")
             onJobSuccess(companyName, applicationName, self.path.name)
           } recover {

@@ -240,7 +240,7 @@ class NumberSessionsBetweenPurchases(sc: SparkContext) extends Actor with ActorL
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms, paymentSystems) => {
       try {
         log.info(s"core job ended ${sender.toString}")
         updateCompletedDependencies(sender)

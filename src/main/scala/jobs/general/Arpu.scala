@@ -35,7 +35,8 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
     applicationName: String,
     start: Date,
     end: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
@@ -47,16 +48,36 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
 
     val results = (optRevenue, optActive) match {
       case (Some(totalRevenue), Some(activeUsers)) => {
-        val arpu = if(activeUsers.result > 0) totalRevenue.result / activeUsers.result else 0
+        val arpu = if(activeUsers.result > 0) totalRevenue.result / activeUsers.result else 0.0
         val platformResults = (totalRevenue.platforms zip activeUsers.platforms).sorted map {p =>
-          val pArpu = if(p._2.res > 0) p._1.res / p._2.res else 0
-          new PlatformResults(p._1.platform, pArpu)
+          val pArpu = if(p._2.res > 0) p._1.res / p._2.res else 0.0
+          val paymentsResults = paymentSystems map {psys =>
+            val revPaymentSysOpt = p._1.paymentSystems.get.find(_.system.toInt == psys)
+            val activeUsersPaymentSysOpt = p._2.paymentSystems.get.find(_.system.toInt == psys)
+            (revPaymentSysOpt, activeUsersPaymentSysOpt) match {
+              case (Some(revPaymentSys), Some(activeUsersPaymentSys)) => {
+                val arpuSys = if(activeUsersPaymentSys.res > 0) revPaymentSys.res / activeUsersPaymentSys.res else 0.0
+                new PaymentSystemResult(psys.toString, arpuSys)
+              }
+              case _ => {
+                new PaymentSystemResult(psys.toString, 0.0)
+              }
+            }
+            
+          }
+          
+          new PlatformResults(p._1.platform, pArpu, Some(paymentsResults))
         }
         new Results(arpu, platformResults, start, end)      
       } 
       case _ => {
         log.info("One of collections is empty")
-        new Results(0.0, platforms map {new PlatformResults(_, 0.0)}, start, end)
+        new Results(
+          0.0,
+          platforms map {new PlatformResults(_, 0.0, Some(paymentSystems map {p => new PaymentSystemResult(p.toString, 0.0)}))},
+          start,
+          end
+        )
       } 
     }
     saveResultToDatabase(ThorContext.URI, getCollectionOutput(companyName, applicationName), results)
@@ -67,15 +88,15 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms, paymentSystems) => {
       try {
         log.info(s"core job ended ${sender.toString}")
         updateCompletedDependencies(sender)
         if(dependenciesCompleted) {
           log.info("execute job")
-          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
+          executeJob(companyName, applicationName, lower, upper, platforms, paymentSystems) map { arpu =>
             log.info("Job completed successful")
-            ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper, platforms)
+            ltvJob ! CoreJobCompleted(companyName, applicationName, "Arpu", lower, upper, platforms, paymentSystems)
             onJobSuccess(companyName, applicationName, "Arpu")
           } recover {
             case ex: Exception => onJobFailure(ex, "Arpu")

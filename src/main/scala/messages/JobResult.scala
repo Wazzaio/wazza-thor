@@ -12,6 +12,7 @@ case class CoreJobCompleted(
   name: String,
   lower: Date,
   upper: Date,
-  platforms: List[String]
+  platforms: List[String],
+  paymentSystems: List[Int]
 ) extends JobResult
 

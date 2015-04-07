@@ -31,11 +31,15 @@ object NrSessionsPerUserData {
   def apply: NrSessionsPerUserData = new NrSessionsPerUserData(0, 0, List[NrSessionsUserPlatformData]())
 }
 
-sealed case class LifeTimeValuePlatformsResult(value: Double, platform: String)
+sealed case class LifeTimeValuePaymentSystemsResult(system: Int, value: Double)
+sealed case class LifeTimeValuePlatformsResult(value: Double, platform: String, paymentSystems: List[LifeTimeValuePaymentSystemsResult])
 object LifeTimeValuePlatformsResult {
 
   implicit def toBSON(ltv: LifeTimeValuePlatformsResult): MongoDBObject = {
-    MongoDBObject("res" -> ltv.value, "platform" -> ltv.platform)
+    MongoDBObject("res" -> ltv.value,
+      "platform" -> ltv.platform,
+      "paymentSystems" -> (ltv.paymentSystems map {s => MongoDBObject("system" -> s.system, "res" -> s.value)})
+    )
   }
 
   implicit def toListBSON(lst: List[LifeTimeValuePlatformsResult]): List[MongoDBObject] = {
@@ -50,16 +54,20 @@ object LifeTimeValueResult {
     MongoDBObject("result" -> ltv.total, "platforms" -> LifeTimeValuePlatformsResult.toListBSON(ltv.platforms))
   }
 
-  def default(platforms: List[String]): LifeTimeValueResult = {
-    new LifeTimeValueResult(0, platforms map {new LifeTimeValuePlatformsResult(0,_)})
+  def default(platforms: List[String], paymentSystems: List[Int]): LifeTimeValueResult = {
+    new LifeTimeValueResult(
+      0,
+      platforms map {
+        new LifeTimeValuePlatformsResult(0,_, paymentSystems map {new LifeTimeValuePaymentSystemsResult(_, 0.0)})
+      })
   }
-  
 }
 
 class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with ChildJob {
   import context._
 
   private val ProfitMargin = 0.70
+  private val PayPalMargin = 0.029
   def inputCollectionType: String = "purchases"
   def outputCollectionType: String = "LifeTimeValue"
 
@@ -194,7 +202,8 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
     applicationName: String,
     start: Date,
     end: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
@@ -208,8 +217,16 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
         val arpuPlatformResults = (arpuJson \ "platforms").as[JsArray].value
         val arpuPerPlatform = platforms map {platform =>
           val value = arpuPlatformResults.find(e => (e \ "platform").as[String] == platform) match {
-            case Some(data) => (data \ "res").as[Double]
-            case None => 0
+            case Some(data) => {
+              val paymentSystemsData = paymentSystems map {system =>
+                (data \ "paymentSystems").as[JsArray].value.find(e => (e \ "system").as[String] == system) match {
+                  case Some(paymentInfo) => (system, (paymentInfo \ "res").as[Double])
+                  case None => (system, 0.0)
+                }
+              }
+              ((data \ "res").as[Double], paymentSystemsData)
+            }
+            case None => (0.0, paymentSystems map {(_, 0.0)})
           }
           (platform, value)
         }
@@ -218,14 +235,20 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
         val platformsLTV = (arpuPerPlatform zip nrSessionsUser.platforms) map {element =>
           val arpu = element._1._2
           val nrSessions = element._2.total
-          new LifeTimeValuePlatformsResult(arpu * nrSessions * ProfitMargin, element._1._1)
+          val paymentSystemsResults = paymentSystems map {system =>
+            element._1._2._2.find(_._1 == system) match {
+              case Some(paymentInfo) => new LifeTimeValuePaymentSystemsResult(system, paymentInfo._2 * nrSessions * PayPalMargin)
+              case None => new LifeTimeValuePaymentSystemsResult(system, 0.0)
+            }
+          }
+          new LifeTimeValuePlatformsResult(arpu._1 * nrSessions * ProfitMargin, element._1._1, paymentSystemsResults)
         }
 
         new LifeTimeValueResult(totalLTV, platformsLTV)
       }
       case _ => {
         log.info("Default value for LTV")
-        LifeTimeValueResult.default(platforms)
+        LifeTimeValueResult.default(platforms, paymentSystems)
       }
     }
 
@@ -245,13 +268,13 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms, paymentSystems) => {
       try {
         log.info(s"core job ended ${sender.toString}")
         updateCompletedDependencies(sender)
         if(dependenciesCompleted) {
           log.info("execute job")
-          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
+          executeJob(companyName, applicationName, lower, upper, platforms, paymentSystems) map { arpu =>
             log.info("Job completed successful")
             onJobSuccess(companyName, applicationName, self.path.name)
           } recover {

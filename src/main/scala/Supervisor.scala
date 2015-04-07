@@ -14,13 +14,14 @@ object Supervisor {
   def props(companyName: String,
     appName: String,
     platforms: List[String],
+    paymentSystems: List[Int],
     start: Date,
     end: Date,
     system: ActorSystem,
     sc: SparkContext,
     thor: ActorRef
   ): Props = {
-    Props(new Supervisor(companyName, appName, platforms, start, end, system, sc, thor))
+    Props(new Supervisor(companyName, appName, platforms, paymentSystems, start, end, system, sc, thor))
   }
 }
 
@@ -28,6 +29,7 @@ class Supervisor(
   companyName: String,
   appName: String,
   platforms: List[String],
+  paymentSystems: List[Int],
   start: Date,
   end: Date,
   system: ActorSystem,
@@ -127,7 +129,7 @@ class Supervisor(
     jobs = buffer.toList
     
     for(jobActor <- jobs) {
-      jobActor ! InitJob(companyName, appName, platforms, start, end)
+      jobActor ! InitJob(companyName, appName, platforms, paymentSystems, start, end)
     }
   }
 

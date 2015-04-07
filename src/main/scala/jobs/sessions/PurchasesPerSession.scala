@@ -25,30 +25,52 @@ import play.api.libs.json._
 object PurchasesPerSession {
   def props(sc: SparkContext): Props = Props(new PurchasesPerSession(sc))
 
-  def mapPayingUsersRDD(rdd: RDD[Tuple2[Object, BSONObject]], platforms: List[String]) = {
+  def mapPayingUsersRDD(rdd: RDD[Tuple2[Object, BSONObject]], platforms: List[String], paymentSystems: List[Int]) = {
     rdd map {element =>
       val totalPurchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size
       val purchasesPerPlatform = platforms map {platform =>
         val p = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray]
         val nrPurchases = p.value.find(el => (el \ "platform").as[String] == platform) match {
-          case Some(platformPurchases) => (platformPurchases \ "purchases").as[JsArray].value.size
-          case _ => 0
+          case Some(platformPurchasesJson) => {
+            // Get total purchases on this platform as well as by payment system
+            val platformPurchases = (platformPurchasesJson \ "purchases").as[JsArray].value.toList
+            val totalPurchases = platformPurchases.size
+            val purchasesPerPaymentSystem = paymentSystems map {system =>
+              new PurchasesPerPaymentSystem(
+                system,
+                platformPurchases.count(pp => (pp \ "paymentSystem").as[Int] == system)
+              )
+            }
+            (totalPurchases, purchasesPerPaymentSystem)
+          }
+          case _ => (0, paymentSystems map {new PurchasesPerPaymentSystem(_, 0)})
         }
-        new PurchasePerPlatform(platform, nrPurchases)
+        new PurchasePerPlatform(platform, nrPurchases._1, nrPurchases._2)
       }
       new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
     }
   }
 
-  def reducePayingUsers(rdd: RDD[PurchasePerUser], platforms: List[String]): PurchasePerUser = {
+  def reducePayingUsers(rdd: RDD[PurchasePerUser], platforms: List[String], paymentSystems: List[Int]): PurchasePerUser = {
     rdd.reduce{(res, current) =>
       val total = res.totalPurchases + current.totalPurchases
       val purchasesPerPlatforms = platforms map {p =>
-        def purchaseCalculator(pps: List[PurchasePerPlatform]) = {
+        def purchaseCalculator(pps: List[PurchasePerPlatform]): Double = {
           pps.find(_.platform == p).get.purchases
         }
         val updatedPurchases = purchaseCalculator(current.platforms) + purchaseCalculator(res.platforms)
-        val result = new PurchasePerPlatform(p, updatedPurchases)
+        val updatedPurchasesPerPayments = paymentSystems map {system =>
+          def calculatePaymentsPerSystem(el: PurchasePerUser): Int = {
+            el.platforms.find(_.platform == p).get.paymentSystemsPurchases.count(
+              _.paymentSystem == system
+            )
+          }
+          //Get current platform element; check if it has the current payment and update the result
+          val currentPlatformPayments = calculatePaymentsPerSystem(current)
+          val accumPlatformPayments = calculatePaymentsPerSystem(res)
+          new PurchasesPerPaymentSystem(system, currentPlatformPayments + accumPlatformPayments)
+          }
+        val result = new PurchasePerPlatform(p, updatedPurchases, updatedPurchasesPerPayments)
         result
       }
       new PurchasePerUser(null, total, purchasesPerPlatforms.toList)
@@ -85,19 +107,28 @@ object PurchasesPerSession {
   }
 }
 
-sealed case class PurchasePerPlatform(platform: String, purchases: Double)
+/** Purchases case classes **/
+sealed case class PurchasesPerPaymentSystem(paymentSystem: Int, purchases: Double)
+sealed case class PurchasePerPlatform(
+  platform: String,
+  purchases: Double,
+  paymentSystemsPurchases: List[PurchasesPerPaymentSystem]
+)
 sealed case class PurchasePerUser(userId: String, totalPurchases: Double, platforms: List[PurchasePerPlatform])
 object PurchasePerUser {
   def apply: PurchasePerUser = new PurchasePerUser(null, 0, List[PurchasePerPlatform]())
 }
 
+/** Sessions case classes **/
 sealed case class SessionsPerPlatform(platform: String, sessions: Double)
 sealed case class NrSessions(total: Double, platforms: List[SessionsPerPlatform])
 object NrSessions {
   def apply: NrSessions = new NrSessions(0, List[SessionsPerPlatform]())
 }
 
-sealed case class PurchasesPerSessionPerPlatform(platform: String, value: Double)
+/** Results **/
+sealed case class PaymentSystemsResults(paymentSystem: Int, value: Double)
+sealed case class PurchasesPerSessionPerPlatform(platform: String, value: Double, paymentSystems: List[PaymentSystemsResults])
 sealed case class PurchasesPerSessionResult(total: Double, platforms: List[PurchasesPerSessionPerPlatform])
 
 class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
@@ -107,7 +138,13 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
   def outputCollectionType: String = "PurchasesPerSession"
 
   private implicit def PurchasesPerSessionPerPlatformToBson(p: PurchasesPerSessionPerPlatform): MongoDBObject = {
-    MongoDBObject("platform" -> p.platform, "res" -> p.value)
+    MongoDBObject(
+      "platform" -> p.platform,
+      "res" -> p.value,
+      "paymentSystems" -> (p.paymentSystems map {e =>
+        MongoDBObject("system" -> e.paymentSystem, "res" -> e.value)
+      })
+    )
   }
 
   private def saveResultToDatabase(
@@ -118,13 +155,18 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     end: Date,
     companyName: String,
     applicationName: String,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ) = {
     val uri  = MongoClientURI(uriStr)
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val platformResults = if(result.platforms.isEmpty) {
-      platforms.map {p => MongoDBObject("platform" -> p, "res" -> 0.0)}
+      platforms.map {p => MongoDBObject(
+        "platform" -> p,
+        "res" -> 0.0,
+        "paymentSystems" -> (paymentSystems map {e => MongoDBObject("system" -> e, "res" -> 0.0)}))
+      }
     } else {
       result.platforms.map{PurchasesPerSessionPerPlatformToBson(_)}
     }
@@ -144,7 +186,8 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     applicationName: String,
     start: Date,
     end: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): PurchasePerUser = {
     val inputUri = s"${ThorContext.URI}.${inputCollection}"
     val jobConfig = new Configuration
@@ -166,7 +209,7 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
 
     if(payingUsersRDD.count > 0) {
       PurchasesPerSession.reducePayingUsers(
-        PurchasesPerSession.mapPayingUsersRDD(payingUsersRDD, platforms), platforms
+        PurchasesPerSession.mapPayingUsersRDD(payingUsersRDD, platforms, paymentSystems), platforms, paymentSystems
       )
     } else {
       log.info("Count is zero")
@@ -208,7 +251,8 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
     applicationName: String,
     start: Date,
     end: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
@@ -218,7 +262,8 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       applicationName,
       start,
       end,
-      platforms
+      platforms,
+      paymentSystems
     )
     val nrSessions = getNumberSessions(s"${companyName}_numberSessions_${applicationName}", start, end, platforms)
 
@@ -236,7 +281,16 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
 
     val resultPlatforms = zippedPlatforms.foldLeft(List[PurchasesPerSessionPerPlatform]()){(res, current) => {
       val result = if(current._2.sessions > 0) current._1.purchases / current._2.sessions else 0
-      res :+ new PurchasesPerSessionPerPlatform(current._1.platform, result)
+      val paymentSystemsResults = paymentSystems map {system =>
+        current._1.paymentSystemsPurchases.find(_.paymentSystem == system) match {
+          case Some(paymentSystemInfo) => {
+            val res = if(current._2.sessions > 0) paymentSystemInfo.purchases / current._2.sessions else 0.0
+            new PaymentSystemsResults(system, res)
+          }
+          case None => {new PaymentSystemsResults(system, 0.0)}
+        }
+      }
+      res :+ new PurchasesPerSessionPerPlatform(current._1.platform, result, paymentSystemsResults)
     }}
 
     saveResultToDatabase(
@@ -247,7 +301,8 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
       end,
       companyName,
       applicationName,
-      platforms
+      platforms,
+      paymentSystems
     )
     promise.success()
     promise.future
@@ -256,13 +311,13 @@ class PurchasesPerSession(sc: SparkContext) extends Actor with ActorLogging  wit
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms, paymentSystems) => {
       try {
         log.info(s"core job ended ${sender.toString}")
         updateCompletedDependencies(sender)
         if(dependenciesCompleted) {
           log.info("execute job")
-          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
+          executeJob(companyName, applicationName, lower, upper, platforms, paymentSystems) map { arpu =>
             log.info("Job completed successful")
             onJobSuccess(companyName, applicationName, self.path.name)
           } recover {

@@ -26,24 +26,33 @@ import scala.collection.mutable.Map
 object AveragePurchasesUser {
   def props(sc: SparkContext): Props = Props(new AveragePurchasesUser(sc))
 
-  val platforms = List("Android", "iOS")
-
-  def mapRDD(rdd: RDD[Tuple2[Object, BSONObject]]) = {
+  def mapRDD(
+    rdd: RDD[Tuple2[Object, BSONObject]],
+    platforms: List[String],
+    paymentSystems: List[Int]
+  ) = {
     rdd map {element =>
       val totalPurchases = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size
       val purchasesPerPlatform = platforms map {platform =>
         val p = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray]
         val nrPurchases = p.value.find(el => (el \ "platform").as[String] == platform) match {
-          case Some(platformPurchases) => (platformPurchases \ "purchases").as[JsArray].value.size
-          case _ => 0
+          case Some(platformPurchases) => {
+            val purchases = (platformPurchases \ "purchases").as[JsArray].value
+            val totalPlatformPurchases = purchases.size
+            val paymentSystemsPurchases = paymentSystems map {system =>
+              new PurchasesPerPaymentSystem(system, purchases.count(p => (p \ "paymentSystem").as[Int] == system))
+            }
+            (totalPurchases, paymentSystemsPurchases)
+          }
+          case _ => (0, paymentSystems map {new PurchasesPerPaymentSystem(_, 0)})
         }
-        new PurchasePerPlatform(platform, nrPurchases)
+        new PurchasePerPlatform(platform, nrPurchases._1, nrPurchases._2)
       }
       new PurchasePerUser(element._2.get("userId").toString, totalPurchases, purchasesPerPlatform)
     }
   }
 
-  def reduceRDD(rdd: RDD[PurchasePerUser]) = {
+  def reduceRDD(rdd: RDD[PurchasePerUser], platforms: List[String], paymentSystems: List[Int]) = {
     rdd.reduce{(res, current) =>
       val total = res.totalPurchases + current.totalPurchases
       val purchasesPerPlatforms = platforms map {p =>
@@ -51,15 +60,24 @@ object AveragePurchasesUser {
           pps.find(_.platform == p).get.purchases
         }
         val updatedPurchases = purchaseCalculator(current.platforms) + purchaseCalculator(res.platforms)
-        val result = new PurchasePerPlatform(p, updatedPurchases)
-        result
+        val updatePaymentSystemResults = paymentSystems map {system =>
+          def getPaymentSystemResults(element: List[PurchasePerPlatform]): Int = {
+            element.find(_.platform == p).get.paymentSystemsPurchases.count(_.paymentSystem == system)
+          }
+          
+          val currentPaymentResults = getPaymentSystemResults(current.platforms)
+          val accumPaymentResults = getPaymentSystemResults(res.platforms)
+          new PurchasesPerPaymentSystem(system, currentPaymentResults + accumPaymentResults)
+        }
+        new PurchasePerPlatform(p, updatedPurchases, updatePaymentSystemResults)
       }
       new PurchasePerUser(null, total, purchasesPerPlatforms.toList)
     }
   }
 }
 
-sealed case class AveragePurchaseUserPerPlatform(platform: String, value: Double)
+sealed case class AveragePurchaseUserPerPaymentSystem(system: Int, value: Double)
+sealed case class AveragePurchaseUserPerPlatform(platform: String, value: Double, systems: List[AveragePurchaseUserPerPaymentSystem])
 sealed case class AveragePurchaseUser(total: Double, platforms: List[AveragePurchaseUserPerPlatform])
 
 class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  with ChildJob {
@@ -69,7 +87,11 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
   def outputCollectionType: String = "avgPurchasesUser"
 
   private def averagePurchaseUserPerPlatformToBson(p: AveragePurchaseUserPerPlatform): MongoDBObject = {
-    MongoDBObject("platform" -> p.platform, "res" -> p.value)
+    MongoDBObject(
+      "platform" -> p.platform,
+      "res" -> p.value,
+      "paymentSystems" -> (p.systems map {s => MongoDBObject("system" -> s.system, "res" -> s.value)})
+    )
   }
 
   private def saveResultToDatabase(
@@ -80,13 +102,16 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
     end: Date,
     companyName: String,
     applicationName: String,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ) = {
     val uri  = MongoClientURI(uriStr)
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val platformResults = if(result.platforms.isEmpty) {
-      platforms.map {p => MongoDBObject("platform" -> p, "res" -> 0.0)}
+      platforms.map {p =>
+        MongoDBObject("platform" -> p, "res" -> 0.0,
+        "paymentSystems" -> (paymentSystems map {s => MongoDBObject("system" -> s, "res" -> 0.0)}))}
     } else {
       result.platforms.map{averagePurchaseUserPerPlatformToBson(_)}
     }
@@ -107,7 +132,8 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
     applicationName: String,
     start: Date,
     end: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): Future[Unit] = {
     val promise = Promise[Unit]
 
@@ -130,16 +156,28 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
     )
 
     val result = if(payingUsersRDD.count > 0) {
-      val payingUsers = AveragePurchasesUser.mapRDD(payingUsersRDD)
-      val purchases = AveragePurchasesUser.reduceRDD(payingUsers)
-      val nrUsers = payingUsers.count
+      val payingUsers = AveragePurchasesUser.mapRDD(payingUsersRDD, platforms, paymentSystems)
+      val purchases = AveragePurchasesUser.reduceRDD(payingUsers, platforms, paymentSystems)
+      val nrUsers = payingUsers.count.toDouble
       new AveragePurchaseUser(
         purchases.totalPurchases / nrUsers,
-        purchases.platforms.map{p =>new AveragePurchaseUserPerPlatform(p.platform, p.purchases / nrUsers)}
+        purchases.platforms.map{p =>
+          new AveragePurchaseUserPerPlatform(
+            p.platform,
+            p.purchases / nrUsers.toDouble,
+            p.paymentSystemsPurchases map {s => new AveragePurchaseUserPerPaymentSystem(s.paymentSystem, s.purchases / nrUsers)}
+          )
+        }
       )
     } else {
       log.info("Count is zero")
-      new AveragePurchaseUser(0.0, platforms map {new AveragePurchaseUserPerPlatform(_, 0.0)})
+      new AveragePurchaseUser(
+        0.0,
+        platforms map {
+          new AveragePurchaseUserPerPlatform(
+            _, 0.0,
+            paymentSystems map {new AveragePurchaseUserPerPaymentSystem(_, 0.0)})
+        })
     }
 
     saveResultToDatabase(
@@ -150,7 +188,8 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
       end,
       companyName,
       applicationName,
-      platforms
+      platforms,
+      paymentSystems
     )
     promise.success()
     promise.future
@@ -159,7 +198,7 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
   def kill = stop(self)
 
   def receive = {
-    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms) => {
+    case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms, paymentSystems) => {
       try {
         log.info(s"core job ended ${sender.toString}")
         updateCompletedDependencies(sender)
@@ -172,7 +211,8 @@ class AveragePurchasesUser(sc: SparkContext) extends Actor with ActorLogging  wi
             applicationName,
             lower,
             upper,
-            platforms
+            platforms,
+            paymentSystems
           ) map { arpu =>
             log.info("Job completed successful")
             onJobSuccess(companyName, applicationName, self.path.name)

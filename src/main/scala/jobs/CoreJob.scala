@@ -21,9 +21,10 @@ trait CoreJob extends WazzaActor {
     jobType: String,
     lower: Date,
     upper: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ) = {
-    dependants.foreach{_ ! CoreJobCompleted(companyName, applicationName, jobType, lower, upper, platforms)}
+    dependants.foreach{_ ! CoreJobCompleted(companyName, applicationName, jobType, lower, upper, platforms, paymentSystems)}
     jobCompleted = true
   }
 

@@ -70,7 +70,7 @@ class NumberSessions(
           (arg._2.get("id"), 1)
         }).groupByKey.count
       } else 0
-      new PlatformResults(rdd._1, numberSessions)
+      new PlatformResults(rdd._1, numberSessions, None)
     }
 
     val totalNumberSessions = platformResults.foldLeft(0.0)(_ + _.res)
@@ -83,7 +83,7 @@ class NumberSessions(
   def kill = stop(self)
 
   def receive = {
-    case InitJob(companyName ,applicationName, platforms, lowerDate, upperDate) => {
+    case InitJob(companyName ,applicationName, platforms, paymentSystems, lowerDate, upperDate) => {
       try {
         log.info(s"InitJob received - $companyName | $applicationName | $lowerDate | $upperDate")
         supervisor = sender
@@ -95,7 +95,7 @@ class NumberSessions(
           platforms
         ) map {res =>
           log.info("Job completed successful")
-          onJobSuccess(companyName, applicationName, "Number Sessions", lowerDate, upperDate, platforms)
+          onJobSuccess(companyName, applicationName, "Number Sessions", lowerDate, upperDate, platforms, paymentSystems)
         } recover {
           case ex: Exception => {
             log.error("Job failed")
