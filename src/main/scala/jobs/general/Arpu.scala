@@ -53,10 +53,9 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
           val pArpu = if(p._2.res > 0) p._1.res / p._2.res else 0.0
           val paymentsResults = paymentSystems map {psys =>
             val revPaymentSysOpt = p._1.paymentSystems.get.find(_.system.toInt == psys)
-            val activeUsersPaymentSysOpt = p._2.paymentSystems.get.find(_.system.toInt == psys)
-            (revPaymentSysOpt, activeUsersPaymentSysOpt) match {
-              case (Some(revPaymentSys), Some(activeUsersPaymentSys)) => {
-                val arpuSys = if(activeUsersPaymentSys.res > 0) revPaymentSys.res / activeUsersPaymentSys.res else 0.0
+            revPaymentSysOpt match {
+              case Some(revPaymentSys) => {
+                val arpuSys = if(p._2.res > 0) revPaymentSys.res / p._2.res else 0.0
                 new PaymentSystemResult(psys.toString, arpuSys)
               }
               case _ => {

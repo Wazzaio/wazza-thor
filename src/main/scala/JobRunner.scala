@@ -35,7 +35,6 @@ class JobRunner extends Job with InterruptableJob {
       .setMaster("local")     
       //.set("spark.scheduler.mode", "FAIR")
       .set("spark.logConf", "true")
-      .set("spark.eventLog.enabled","true") //Spark UI
     new SparkContext(conf)
   }
 

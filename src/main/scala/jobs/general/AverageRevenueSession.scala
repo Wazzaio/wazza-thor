@@ -53,10 +53,9 @@ class AverageRevenuePerSession(sc: SparkContext) extends Actor with ActorLogging
           val aAvgRevenueSessions = if(p._2.res > 0) p._1.res / p._2.res else 0
           val paymentsResults = paymentSystems map {psys =>
             val revPaymentSysOpt = p._1.paymentSystems.get.find(_.system.toInt == psys)
-            val nrSessionsPaymentSysOpt = p._2.paymentSystems.get.find(_.system.toInt == psys)
-              (revPaymentSysOpt, nrSessionsPaymentSysOpt) match {
-              case (Some(revPaymentSys), Some(nrSessionsPaymentSys)) => {
-                val resSys = if(nrSessionsPaymentSys.res > 0) revPaymentSys.res / nrSessionsPaymentSys.res else 0.0
+              revPaymentSysOpt match {
+              case Some(revPaymentSys) => {
+                val resSys = if(p._2.res > 0) revPaymentSys.res / p._2.res else 0.0
                 new PaymentSystemResult(psys.toString, resSys)
               }
               case _ => {

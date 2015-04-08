@@ -72,9 +72,9 @@ class TotalRevenue(
     val platformResults = rdds map {rdd =>
       if(rdd._2.count() > 0) {
         // Filters only the entrances that match the selected payment systems
-        val filteredRDD = rdd._2.filter{el =>
+        val filteredRDD = rdd._2/**.filter{el =>
           paymentSystems.contains(el._2.get("paymentSystem").toString.toInt)
-        }
+        }**/
 
         if(filteredRDD.count > 0) {
           val totalRevenuePerPaymentSystem = rdd._2.map(arg => {
