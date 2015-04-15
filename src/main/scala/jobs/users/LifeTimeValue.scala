@@ -77,13 +77,18 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
     result: LifeTimeValueResult,
     end: Date,
     start: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ) = {
     val uri  = MongoClientURI(uriStr)
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val platformResults = if(result.platforms.isEmpty) {
-      platforms.map {p => MongoDBObject("platform" -> p, "res" -> 0.0)}
+      platforms.map {p =>
+        MongoDBObject("platform" -> p, "res" -> 0.0, "paymentSystems" -> (paymentSystems map {system =>
+          MongoDBObject("system" -> system, "res" -> 0.0)
+        }))
+      }
     } else {
       LifeTimeValuePlatformsResult.toListBSON(result.platforms)
     }
@@ -219,7 +224,7 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
           val value = arpuPlatformResults.find(e => (e \ "platform").as[String] == platform) match {
             case Some(data) => {
               val paymentSystemsData = paymentSystems map {system =>
-                (data \ "paymentSystems").as[JsArray].value.find(e => (e \ "system").as[String] == system) match {
+                (data \ "paymentSystems").as[JsArray].value.find(e => (e \ "system").as[Int] == system) match {
                   case Some(paymentInfo) => (system, (paymentInfo \ "res").as[Double])
                   case None => (system, 0.0)
                 }
@@ -258,7 +263,8 @@ class LifeTimeValue(ctx: SparkContext) extends Actor with ActorLogging  with Chi
       result,
       end,
       start,
-      platforms
+      platforms,
+      paymentSystems
     )
 
     promise.success()

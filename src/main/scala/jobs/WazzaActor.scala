@@ -145,7 +145,7 @@ trait WazzaActor {
     }
   }
 
-  protected case class PaymentSystemResult(system: String, res: Double)
+  protected case class PaymentSystemResult(system: Int, res: Double)
   protected case class PlatformResults(
     platform: String,
     res: Double,
@@ -164,7 +164,7 @@ trait WazzaActor {
 
   protected def paymentSystemsResultsFromJson(jsonList: List[JsValue]): List[PaymentSystemResult] = {
     jsonList map {json =>
-      new PaymentSystemResult((json \ "system").as[String], (json \ "res").as[Double])
+      new PaymentSystemResult((json \ "system").as[Int], (json \ "res").as[Double])
     }
   }
 

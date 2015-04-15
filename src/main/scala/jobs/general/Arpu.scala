@@ -56,10 +56,10 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
             revPaymentSysOpt match {
               case Some(revPaymentSys) => {
                 val arpuSys = if(p._2.res > 0) revPaymentSys.res / p._2.res else 0.0
-                new PaymentSystemResult(psys.toString, arpuSys)
+                new PaymentSystemResult(psys, arpuSys)
               }
               case _ => {
-                new PaymentSystemResult(psys.toString, 0.0)
+                new PaymentSystemResult(psys, 0.0)
               }
             }
             
@@ -73,7 +73,7 @@ class Arpu(sc: SparkContext, ltvJob: ActorRef) extends Actor with ActorLogging  
         log.info("One of collections is empty")
         new Results(
           0.0,
-          platforms map {new PlatformResults(_, 0.0, Some(paymentSystems map {p => new PaymentSystemResult(p.toString, 0.0)}))},
+          platforms map {new PlatformResults(_, 0.0, Some(paymentSystems map {p => new PaymentSystemResult(p, 0.0)}))},
           start,
           end
         )

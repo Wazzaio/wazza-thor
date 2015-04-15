@@ -27,13 +27,15 @@ import org.joda.time.LocalDate
 object NumberSessionsFirstPurchases {
   def props(sc: SparkContext): Props = Props(new NumberSessionsFirstPurchases(sc))
 
+
   def getNumberSessionsFirstPurchasePerUser(
     sc: SparkContext, 
     companyName: String, 
     applicationName: String, 
     userIds: List[String], 
-    platforms: List[String]
-  ): RDD[Tuple2[Double, List[Tuple3[String, Double, Int]]]] = {
+    platforms: List[String],
+    paymentSystems: List[Int]
+  ): RDD[Tuple2[Double, List[Tuple3[String, List[Tuple3[Int, Option[Double], Int]], Int]]]] = {
 
     val collection = s"${companyName}_mUsers_${applicationName}"
     val inputUri = s"${ThorContext.URI}.${collection}"
@@ -57,7 +59,8 @@ object NumberSessionsFirstPurchases {
             new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr)
         }).head
 
-        val sessionsToPurchase = Json.parse(userInfo._2.get("sessions").toString).as[JsArray].value.toList.count(s => {
+        val sessions = Json.parse(userInfo._2.get("sessions").toString).as[JsArray].value.toList
+        val sessionsToPurchase = sessions.count(s => {
           val sessionDate = {
             val dateStr = (s \ "startTime" \ "$date").as[String].replace("T", " ").replace("Z", "")
             new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr)
@@ -65,40 +68,29 @@ object NumberSessionsFirstPurchases {
           sessionDate.before(purchaseDate) || sessionDate.equals(purchaseDate)
         }).toDouble
 
-        //Calculate number of sessions to 1st purchase per platform
+        //Calculate number of sessions to 1st purchase per platform & per payment system
         val platformData = platforms map {p =>
-          val purchases = Json.parse(userInfo._2.get("purchases").toString).as[JsArray].value.toList
-          val purchaseDateOpt = if(purchases.size == 1) {
-            purchases.find(pp => (pp \ "platform").as[String] == p) match {
+          val platformPurchases = purchases.filter(pp => (pp \ "platform").as[String] == p)
+          val paymentsData = paymentSystems map {system =>
+            platformPurchases.find(ps => (ps \ "paymentSystem").as[Int] == system) match {
               case Some(purchase) => {
                 val dateStr = (purchase \ "time" \ "$date").as[String].replace("T", " ").replace("Z", "")
-                Some(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr))
+                val purchaseDate = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr)
+                val sessionsToPurchase = sessions.count(s => {
+                  val sessionDate = {
+                    val dateStr = (s \ "startTime" \ "$date").as[String].replace("T", " ").replace("Z", "")
+                    new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr)
+                  }
+                  val dateValidation = sessionDate.before(purchaseDate) || sessionDate.equals(purchaseDate)
+                  val platformValidation = (s \ "platform").as[String] == p
+                  dateValidation && platformValidation
+                })
+                (system, Some(sessionsToPurchase.toDouble), 1)
               }
-              case None => None
-            }
-          } else {
-            None
-          }
-
-          //Date is an Option[Date] so if resolves to None, the current value is not considered
-          purchaseDateOpt match {
-            case Some(purchaseDate) => {
-              val sessionsToPurchase = Json.parse(userInfo._2.get("sessions").toString).as[JsArray].value.toList.count(s => {
-                val sessionDate = {
-                  val dateStr = (s \ "startTime" \ "$date").as[String].replace("T", " ").replace("Z", "")
-                  new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr)
-                }
-                val dateValidation = sessionDate.before(purchaseDate) || sessionDate.equals(purchaseDate)
-                val platformValidation = (s \ "platform").as[String] == p
-                dateValidation && platformValidation
-              })
-              // Format: (platform, sessions, platformUser)
-              (p, sessionsToPurchase.toDouble, 1)
-            }
-            case None => {
-              (p, 0.0, 1)
+              case None => (system, None, 0)
             }
           }
+          (p, paymentsData, 1)
         }
         (sessionsToPurchase, platformData)
       }
@@ -112,7 +104,8 @@ object NumberSessionsFirstPurchases {
     rdd: RDD[Tuple2[Object, BSONObject]],
     start: Date,
     end: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): RDD[String] = {
     rdd.filter{element =>
       def parseFloat(d: String): Option[Long] = {
@@ -131,8 +124,11 @@ object NumberSessionsFirstPurchases {
         val platformsFilter = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray].value
           .filter(e => platforms.contains((e \ "platform").as[String]))
           .map(p => {
-            val filter = (p \ "purchases").as[JsArray].value.size == 1
-            ((p \ "platform").as[String], filter)
+            val purchases = (p \ "purchases").as[JsArray].value.toList
+            val filter = paymentSystems map {system =>
+              purchases.count(pp => (pp \ "paymentSystem").as[Int] == system) == 1
+            }
+            ((p \ "platform").as[String], filter.exists(_ == true))
           })
         if(purchasesFilter) {
           true
@@ -155,26 +151,37 @@ class NumberSessionsFirstPurchases(sc: SparkContext) extends Actor with ActorLog
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    result: Tuple2[Double, Tuple2[Double, List[Tuple3[String, Double, Int]]]],
+    result: Tuple2[Double,Tuple2[Double, List[Tuple3[String, List[Tuple3[Int, Option[Double], Int]], Int]]]],
     end: Date,
     start: Date,
     companyName: String,
     applicationName: String,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): Try[Unit] = {
     try {
       val uri  = MongoClientURI(uriStr)
       val client = MongoClient(uri)
       val collection = client.getDB(uri.database.get)(collectionName)
-      val totalResult = if(result._1 > 0) result._1 / result._2._1 else 0.0
+      val totalResult = if(result._1 > 0) result._2._1 / result._1 else 0.0
       val platformResults = platforms map {p =>
         result._2._2.find(_._1 == p) match {
           case Some(platformValue) => {
             val platformUsers = platformValue._3
-            val res = if(platformUsers > 0) platformValue._2 / platformUsers else 0.0
-            (p, platformUsers, res)
+            val sumPlatformSessions = platformValue._2.foldLeft(0.0)(_ + _._2.getOrElse(0.0))
+            val res = if(platformUsers > 0) sumPlatformSessions / platformUsers else 0.0
+            val paymentSystemsResult = paymentSystems map {system =>
+              platformValue._2.find(_._1 == system) match {
+                case Some(systemInfo) => {
+                  val res = if(systemInfo._3 > 0) systemInfo._2.getOrElse(0.0) / systemInfo._3 else 0.0
+                  (system, res, systemInfo._3)
+                }
+                case None => (system, 0.0, 0) //system, result, nrUsers
+              }
+            }
+            (p, platformUsers, res, paymentSystemsResult)
           }
-          case None => (p, 0.0, 0)
+          case None => (p, 0.0, 0, paymentSystems map {(_, 0.0, 0)})
         }
       }
       val obj = MongoDBObject(
@@ -184,7 +191,10 @@ class NumberSessionsFirstPurchases(sc: SparkContext) extends Actor with ActorLog
           MongoDBObject(
             "platform" -> p._1,
             "result" -> p._3,
-            "nrUsers" -> p._2
+            "nrUsers" -> p._2,
+            "paymentSystems" -> (p._4 map {el =>
+              MongoDBObject("system" -> el._1, "result" -> el._2, "nrUsers" -> el._3)
+            })
           )
         }),
         "lowerDate" -> start,
@@ -222,43 +232,60 @@ class NumberSessionsFirstPurchases(sc: SparkContext) extends Actor with ActorLog
     ),
       start,
       end,
-      platforms
+      platforms,
+      paymentSystems
     )
 
-    val results: Tuple2[Double, Tuple2[Double, List[Tuple3[String, Double, Int]]]] = if(firstTimePayingUsersIds.count > 0) {
+    val results: Tuple2[
+      Double,
+      Tuple2[Double, List[Tuple3[String, List[Tuple3[Int, Option[Double], Int]], Int]]]
+      ] = if(firstTimePayingUsersIds.count > 0) {
       val userData = NumberSessionsFirstPurchases.getNumberSessionsFirstPurchasePerUser(
         sc, companyName, applicationName,
-        firstTimePayingUsersIds.collect.toList, platforms
+        firstTimePayingUsersIds.collect.toList, platforms, paymentSystems
       )
 
+      // [Tuple2[Double, List[Tuple3[String, List[Tuple2[Int, Option[Double]]], Int]]]
       val nrUsers = userData.count.toDouble
       val summedResults = userData.reduce{(acc, current) => {
-        val total = acc._1 + current._1
+        val totalSessions = acc._1 + current._1 //sessions
         val platformData = platforms map {platform =>
-          def getPlatformValue(el: List[Tuple3[String, Double, Int]]): Double = {
-            el.find(p => p._1 == platform) match {
-              case Some(v) => v._2
-              case None => 0.0
+          def getPaymentSystemsValues(el: List[Tuple3[String, List[Tuple3[Int, Option[Double], Int]], Int]]): List[Tuple3[Int, Double, Int]] = {
+            el.find(_._1 == platform) match {
+              case Some(platformInfo) => {
+                paymentSystems map {system =>
+                  platformInfo._2.find(_._1 == system) match {
+                    case Some(info) => (system, info._2.getOrElse(0.0), info._3)
+                    case None => (system, 0.0, 0)
+                  }
+                }
+              }
+              case None => paymentSystems map {(_, 0.0, 0)}
             }
           }
 
-          def updatePlatformUsers(el: List[Tuple3[String, Double, Int]]): Int = {
+          def updatePlatformUsers(el: List[Tuple3[String, List[Tuple3[Int, Option[Double], Int]], Int]]): Int = {
             el.find(p => p._1 == platform) match {
               case Some(v) => v._3 +1
               case None => 0
             }
           }
 
-          val value = getPlatformValue(current._2)
-          val platformAcc = getPlatformValue(acc._2)
-          (platform, value + platformAcc, updatePlatformUsers(current._2))
+          val updatedPaymentSystems = getPaymentSystemsValues(acc._2).zip(getPaymentSystemsValues(current._2)).map{el =>
+            (el._1._1, Some(el._1._2 + el._2._2), el._1._3 + el._2._3)
+            //(paymentSystems, nrSessions
+          }
+          (platform, updatedPaymentSystems, updatePlatformUsers(current._2))
         }
-        (total, platformData)
+        (totalSessions, platformData)
       }}
       (nrUsers, summedResults)
     } else {
       log.info("Count is zero")
-      (0.0, (0.0, platforms map{(_, 0.0,0)}))
+      (
+        0.0,
+        (0.0, platforms map {(_, paymentSystems map {(_, Some(0.0), 0)} , 0 ) })
+      )
     }
 
     saveResultToDatabase(
@@ -269,7 +296,8 @@ class NumberSessionsFirstPurchases(sc: SparkContext) extends Actor with ActorLog
       start,
       companyName,
       applicationName,
-      platforms
+      platforms,
+      paymentSystems
     ) match {
       case Success(_) => promise.success()
       case Failure(e) => promise.failure(e)
@@ -279,6 +307,7 @@ class NumberSessionsFirstPurchases(sc: SparkContext) extends Actor with ActorLog
 
   def kill = stop(self)
 
+  //TODO
   def receive = {
     case CoreJobCompleted(companyName, applicationName, name, lower, upper, platforms, paymentSystems) => {
       try {

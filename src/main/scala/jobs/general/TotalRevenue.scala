@@ -84,7 +84,7 @@ class TotalRevenue(
           }).reduceByKey(_ + _)
           val totalRevenue = totalRevenuePerPaymentSystem.values.reduce(_ + _)
           val paymentSystemResults = totalRevenuePerPaymentSystem.collect.toList map {el =>
-            new PaymentSystemResult(el._1, el._2)
+            new PaymentSystemResult(el._1.toInt, el._2)
           }
           new PlatformResults(rdd._1, totalRevenue, Some(paymentSystemResults))
         } else {
@@ -102,7 +102,7 @@ class TotalRevenue(
     } else {
       log.info("Count is zero")
       new Results(0.0,
-        platforms map {new PlatformResults(_, 0.0, Some(paymentSystems map {p => new PaymentSystemResult(p.toString, 0.0)}))},
+        platforms map {new PlatformResults(_, 0.0, Some(paymentSystems map {p => new PaymentSystemResult(p, 0.0)}))},
         lowerDate,
         upperDate
       )
