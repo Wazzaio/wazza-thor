@@ -32,15 +32,16 @@ object NumberSessionsBetweenPurchases {
     applicationName: String,
     start: Date,
     end: Date,
-    platforms: List[String]
-  ): RDD[Tuple2[Object, Tuple2[Double, List[Tuple2[String, Double]]]]] = {
+    platforms: List[String],
+    paymentSystems: List[Int]
+  ): RDD[Tuple2[Object, Tuple2[Double, List[Tuple4[String, Int, Double, List[Tuple2[Int, Double]]]]]]] = {
     val uri = ThorContext.URI
     val collectionName = s"${companyName}_mUsers_${applicationName}"
     val inputUri = s"${uri}.${collectionName}"
     val jobConfig = new Configuration
     jobConfig.set("mongo.input.uri", inputUri)
     jobConfig.set("mongo.input.split.create_input_splits", "false")
-    val emptyRDD = sc.emptyRDD[Tuple2[Object, Tuple2[Double, List[Tuple2[String, Double]]]]]
+    val emptyRDD = sc.emptyRDD[Tuple2[Object, Tuple2[Double, List[Tuple4[String, Int, Double, List[Tuple2[Int, Double]]]]]]]
 
     val rdd = sc.newAPIHadoopRDD(
       jobConfig,
@@ -92,11 +93,15 @@ object NumberSessionsBetweenPurchases {
           val platformResults = platforms map {platform =>
             val platformSessions = sessions.filter(s => (s \ "platform").as[String] == platform)
             val platformPurchases = purchases.filter(p => (p._1 \ "platform").as[String] == platform)
-            (platform, calculate(platformPurchases, platformSessions))
+            val paymentSystemsResults = paymentSystems map {system =>
+              val paymentSystemPurchases = platformPurchases.filter(p => (p._1 \ "paymentSystem").as[Int] == system)
+              (system, calculate(paymentSystemPurchases, platformSessions))
+            }
+            (platform, 1, calculate(platformPurchases, platformSessions), paymentSystemsResults)
           }
           (total, platformResults)
         } else {
-          (0.0, platforms map {(_, 0.0)})
+          (0.0, platforms map {(_, 0, 0.0, paymentSystems map {(_, 0.0)})})
         }
         (element._2.get("userId").toString, results)
       })
@@ -106,9 +111,10 @@ object NumberSessionsBetweenPurchases {
   }
 
   def getTotalSessionsBetweenPurchases(
-    rdd: RDD[Tuple2[Object, Tuple2[Double, List[Tuple2[String, Double]]]]],
-    platforms: List[String]
-  ): Tuple2[Long, Tuple2[Double, List[Tuple2[String, Double]]]] = {
+    rdd: RDD[Tuple2[Object, Tuple2[Double, List[Tuple4[String, Int, Double, List[Tuple2[Int, Double]]]]]]],
+    platforms: List[String],
+    paymentSystem: List[Int]
+  ): Tuple2[Long, Tuple2[Double, List[Tuple4[String, Int, Double, List[Tuple2[Int, Double]]]]]] = {
     val numberUsers = rdd.count
     if(numberUsers > 0) {
       val summedResults = rdd.values.reduce{(acc, current) => {
@@ -116,13 +122,19 @@ object NumberSessionsBetweenPurchases {
         val platformData = platforms map {p =>
           val accumPlatformData = acc._2.find(_._1 == p).get
           val pData = current._2.find(_._1 == p).get
-          (p, accumPlatformData._2 + pData._2)
+          val paymentSystemsData = paymentSystem map {system =>
+            val accSystem = accumPlatformData._4.find(s => s._1 == system).map(_._2).getOrElse(0.0)
+            val sysData = pData._4.find(s => s._1 == system).map(_._2).getOrElse(0.0)
+            (system, accSystem + sysData)
+          }
+          val nrUsersPlatform = accumPlatformData._2 + pData._2
+          (p, nrUsersPlatform, (accumPlatformData._2 + pData._2).toDouble, paymentSystemsData)
         }
         (totalSessions, platformData)
       }}
       (numberUsers, summedResults)
     } else {
-      (0, (0.0, platforms map {(_, 0.0)}))
+      (0, (0.0, platforms map {(_, 0, 0.0, paymentSystem map {(_, 0.0)})}))
     }
   }
 }
@@ -136,29 +148,42 @@ class NumberSessionsBetweenPurchases(sc: SparkContext) extends Actor with ActorL
   private def saveResultToDatabase(
     uriStr: String,
     collectionName: String,
-    result: Tuple2[Long, Tuple2[Double, List[Tuple2[String, Double]]]],
+    result: Tuple2[Long, Tuple2[Double, List[Tuple4[String, Int, Double, List[Tuple2[Int, Double]]]]]],
     start: Date,
     end: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystem: List[Int]
   ) = {
     val uri  = MongoClientURI(uriStr)
     val client = MongoClient(uri)
     val collection = client.getDB(uri.database.get)(collectionName)
     val totalAverage = if(result._1 > 0.0) result._2._1 / result._1 else 0.0
     val platformsAverage = platforms map {p =>
-      val value = result._2._2.find(_._1 == p).get._2
-      val res = if(result._1 > 0.0) value / result._1 else 0.0
-      (p, res)
+      val value = result._2._2.find(_._1 == p).get
+      val res = if(value._2 > 0.0) value._3 / value._2 else 0.0
+      val paymentSystemsResults = paymentSystem map {system =>
+        val paymentNrSessions = value._4.find(_._1 == system).map(_._2).getOrElse(0.0)
+        (system, (if(value._2 > 0.0) paymentNrSessions / value._2 else 0.0))
+      }
+      (p, res, paymentSystemsResults)
     }
 
     val platformResults = if(result._2._2.isEmpty) {
-      platforms map {p => MongoDBObject("platform" -> p, "res" -> 0.0, "totalSessions" -> 0.0)}
+      platforms map {p => MongoDBObject(
+        "platform" -> p, "res" -> 0.0, "totalSessions" -> 0.0,
+        "paymentSystems" -> (paymentSystem map {system =>
+          MongoDBObject("system" -> system, "res" -> 0.0)
+        }))}
     } else {
       result._2._2 map {el =>
         MongoDBObject(
           "platform" -> el._1,
           "res" -> el._2,
-          "totalSessions" -> platformsAverage.find(_._1 == el._1).get._2)
+          "totalSessions" -> platformsAverage.find(_._1 == el._1).get._2,
+          "paymentSystems" -> (el._4 map {s =>
+            MongoDBObject("system" -> s._1, "res" -> s._2)
+          })
+        )
       }
     }
 
@@ -181,8 +206,9 @@ class NumberSessionsBetweenPurchases(sc: SparkContext) extends Actor with ActorL
     collectionName: String, 
     start: Date, 
     end: Date, 
-    platforms: List[String]
-  ): Tuple2[Long, Tuple2[Double, List[Tuple2[String, Double]]]] = {
+    platforms: List[String],
+    paymentSystems: List[Int]
+  ): Tuple2[Long, Tuple2[Double, List[Tuple4[String, Int,Double, List[Tuple2[Int, Double]]]]]] = {
     val uri = ThorContext.URI
     val inputUri = s"${uri}.${collectionName}"
     val jobConfig = new Configuration
@@ -201,9 +227,9 @@ class NumberSessionsBetweenPurchases(sc: SparkContext) extends Actor with ActorL
 
     NumberSessionsBetweenPurchases.getTotalSessionsBetweenPurchases(
       NumberSessionsBetweenPurchases.getSessionsBetweenPurchasesPerUser(
-        sc, payingUsersIds, companyName, applicationName, start, end, platforms
+        sc, payingUsersIds, companyName, applicationName, start, end, platforms, paymentSystems
       ),
-      platforms
+      platforms, paymentSystems
     )
   }
 
@@ -212,7 +238,8 @@ class NumberSessionsBetweenPurchases(sc: SparkContext) extends Actor with ActorL
     applicationName: String,
     start: Date,
     end: Date,
-    platforms: List[String]
+    platforms: List[String],
+    paymentSystems: List[Int]
   ): Future[Unit] = {
     val promise = Promise[Unit]
     val data = calculateNumberSessionsBetweenPurchases(
@@ -221,7 +248,8 @@ class NumberSessionsBetweenPurchases(sc: SparkContext) extends Actor with ActorL
       s"${companyName}_payingUsers_${applicationName}",
       start,
       end,
-      platforms
+      platforms,
+      paymentSystems
     )
 
     saveResultToDatabase(
@@ -230,7 +258,8 @@ class NumberSessionsBetweenPurchases(sc: SparkContext) extends Actor with ActorL
       data,
       start,
       end,
-      platforms
+      platforms,
+      paymentSystems
     )
 
     promise.success()
@@ -246,7 +275,7 @@ class NumberSessionsBetweenPurchases(sc: SparkContext) extends Actor with ActorL
         updateCompletedDependencies(sender)
         if(dependenciesCompleted) {
           log.info("execute job")
-          executeJob(companyName, applicationName, lower, upper, platforms) map { arpu =>
+          executeJob(companyName, applicationName, lower, upper, platforms, paymentSystems) map { arpu =>
             log.info("Job completed successful")
             onJobSuccess(companyName, applicationName, "Number Sessions Between Purchases")
           } recover {
