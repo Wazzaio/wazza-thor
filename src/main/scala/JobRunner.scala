@@ -2,6 +2,8 @@ package wazza.thor
 
 import akka.actor.ActorRef
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import akka.event.slf4j.Logger
+import com.typesafe.config.ConfigFactory
 import java.util.Date
 import org.quartz.InterruptableJob
 import org.quartz.Job
@@ -28,7 +30,7 @@ import wazza.thor.messages._
 
 class JobRunner extends Job with InterruptableJob {
 
-  lazy val system = ActorSystem("ThoR")
+  lazy val system = ActorSystem("ThoR", ConfigFactory.load())
   lazy val sc = {
     val conf = new SparkConf()
       .setAppName("Wazza Analytics")

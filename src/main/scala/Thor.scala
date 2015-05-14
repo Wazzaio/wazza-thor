@@ -4,6 +4,8 @@ import akka.actor.Actor
 import akka.actor.ActorLogging
 import akka.actor.ActorSystem
 import akka.actor.Props
+import com.typesafe.config.Config
+import com.typesafe.config.ConfigFactory
 import java.util.Date
 import org.joda.time.DateTime
 import org.joda.time.DurationFieldType
@@ -24,7 +26,7 @@ class Thor(debug: Boolean, var dates: List[DateTime] = Nil) extends Actor with A
   def createJob(args: Map[String, AnyRef] = Map()): JobDetail = {
     val upper = args.get("CURRENT_DAY") match {
       case Some(date) => date.asInstanceOf[DateTime]
-      case None => new DateTime().withTimeAtStartOfDay()
+      case None => new DateTime().withTimeAtStartOfDay()//.plusDays(1)
     }
 
     val lower = upper.minusDays(1)
@@ -94,7 +96,7 @@ object Thor extends App {
   private lazy val DEFAULT_DAYS = 7
 
   val debugFlag = if(args.size == 1) args.head.asInstanceOf[String] == "true" else false
-  val first = new LocalDate(new Date).withDayOfMonth(1)
+  val first = new LocalDate(new Date).withDayOfMonth(1) //plusDays(1)
   val days = DEFAULT_DAYS
   val dates = if(debugFlag) {
     List.range(0, days) map {index =>
@@ -102,6 +104,7 @@ object Thor extends App {
     }
   } else List()
 
-  ActorSystem("ThorRoot").actorOf(Props(new Thor(debugFlag, dates)), "ThoR")
+  val conf: Config = ConfigFactory.load()
+  ActorSystem("ThorRoot", conf).actorOf(Props(new Thor(debugFlag, dates)), "ThoR")
 }
 
