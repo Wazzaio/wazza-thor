@@ -43,7 +43,7 @@ trait WazzaActor {
       val filteredRDD = rdd.filter(t => {
         def parseDate(d: String): Option[Date] = {
           try {
-            val Format = "E MMM dd HH:mm:ss Z yyyy"
+            val Format = ThorContext.DateFormat//"E MMM dd HH:mm:ss Z yyyy"
             Some(new SimpleDateFormat(Format).parse(d))
           } catch {case _: Throwable => None }
         }
@@ -74,7 +74,7 @@ trait WazzaActor {
     val filteredRDD = rdd.filter(element => {
       def parseDate(d: String): Option[Date] = {
         try {
-          val Format = "E MMM dd HH:mm:ss Z yyyy"
+          val Format = ThorContext.DateFormat //"E MMM dd HH:mm:ss Z yyyy"
           Some(new SimpleDateFormat(Format).parse(d))
         } catch {case _: Throwable => None }
       }
