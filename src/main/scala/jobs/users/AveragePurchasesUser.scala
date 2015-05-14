@@ -40,7 +40,7 @@ object AveragePurchasesUser {
             val purchases = (platformPurchases \ "purchases").as[JsArray].value
             val totalPlatformPurchases = purchases.size
             val paymentSystemsPurchases = paymentSystems map {system =>
-              new PurchasesPerPaymentSystem(system, purchases.count(p => (p \ "paymentSystem").as[Int] == system))
+              new PurchasesPerPaymentSystem(system, purchases.count(p => (p \ "paymentSystem").as[Double].toInt == system))
             }
             (totalPurchases, paymentSystemsPurchases)
           }

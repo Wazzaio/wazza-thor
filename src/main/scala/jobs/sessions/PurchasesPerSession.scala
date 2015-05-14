@@ -38,7 +38,7 @@ object PurchasesPerSession {
             val purchasesPerPaymentSystem = paymentSystems map {system =>
               new PurchasesPerPaymentSystem(
                 system,
-                platformPurchases.count(pp => (pp \ "paymentSystem").as[Int] == system)
+                platformPurchases.count(pp => (pp \ "paymentSystem").as[Double].toInt == system)
               )
             }
             (totalPurchases, purchasesPerPaymentSystem)

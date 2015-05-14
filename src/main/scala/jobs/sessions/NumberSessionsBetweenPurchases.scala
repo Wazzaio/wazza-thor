@@ -55,8 +55,7 @@ object NumberSessionsBetweenPurchases {
     if(rdd.count() > 0) {
       rdd.map(element => {
         def parseDate(json: JsValue, key: String): Date = {
-          val dateStr = (json \ key \ "$date").as[String].replace("T", " ").replace("Z", "")
-          new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr)
+          new Date((json \ key).as[Double].toLong)
         }
 
         def calculate(purchases: List[(JsValue, Int)], sessions: List[JsValue]) = {
@@ -94,7 +93,7 @@ object NumberSessionsBetweenPurchases {
             val platformSessions = sessions.filter(s => (s \ "platform").as[String] == platform)
             val platformPurchases = purchases.filter(p => (p._1 \ "platform").as[String] == platform)
             val paymentSystemsResults = paymentSystems map {system =>
-              val paymentSystemPurchases = platformPurchases.filter(p => (p._1 \ "paymentSystem").as[Int] == system)
+              val paymentSystemPurchases = platformPurchases.filter(p => (p._1 \ "paymentSystem").as[Double].toInt == system)
               (system, calculate(paymentSystemPurchases, platformSessions))
             }
             (platform, 1, calculate(platformPurchases, platformSessions), paymentSystemsResults)

@@ -55,16 +55,12 @@ object NumberSessionsFirstPurchases {
         //Get Purchase Date
         val purchases = Json.parse(userInfo._2.get("purchases").toString).as[JsArray].value.toList
         val purchaseDate = purchases.map(p => {
-          val dateStr = (p \ "time" \ "$date").as[String].replace("T", " ").replace("Z", "")
-            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr)
+          new Date((p \ "time").as[Double].toLong)
         }).head
 
         val sessions = Json.parse(userInfo._2.get("sessions").toString).as[JsArray].value.toList
         val sessionsToPurchase = sessions.count(s => {
-          val sessionDate = {
-            val dateStr = (s \ "startTime" \ "$date").as[String].replace("T", " ").replace("Z", "")
-            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr)
-          }
+          val sessionDate = new Date((s \ "startTime").as[Double].toLong)
           sessionDate.before(purchaseDate) || sessionDate.equals(purchaseDate)
         }).toDouble
 
@@ -72,15 +68,11 @@ object NumberSessionsFirstPurchases {
         val platformData = platforms map {p =>
           val platformPurchases = purchases.filter(pp => (pp \ "platform").as[String] == p)
           val paymentsData = paymentSystems map {system =>
-            platformPurchases.find(ps => (ps \ "paymentSystem").as[Int] == system) match {
+            platformPurchases.find(ps => (ps \ "paymentSystem").as[Double].toInt == system) match {
               case Some(purchase) => {
-                val dateStr = (purchase \ "time" \ "$date").as[String].replace("T", " ").replace("Z", "")
-                val purchaseDate = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr)
+                val purchaseDate =  new Date((purchase \ "time").as[Double].toLong)
                 val sessionsToPurchase = sessions.count(s => {
-                  val sessionDate = {
-                    val dateStr = (s \ "startTime" \ "$date").as[String].replace("T", " ").replace("Z", "")
-                    new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateStr)
-                  }
+                  val sessionDate = new Date((s \ "startTime").as[Double].toLong)
                   val dateValidation = sessionDate.before(purchaseDate) || sessionDate.equals(purchaseDate)
                   val platformValidation = (s \ "platform").as[String] == p
                   dateValidation && platformValidation
@@ -108,33 +100,48 @@ object NumberSessionsFirstPurchases {
     paymentSystems: List[Int]
   ): RDD[String] = {
     rdd.filter{element =>
-      def parseFloat(d: String): Option[Long] = {
-        try { Some(d.toDouble.toLong) } catch { case _: Throwable => None }
+      def parseDate(d: String): Option[Date] = {
+        try {
+          val Format = ThorContext.DateFormat
+          Some(new SimpleDateFormat(Format).parse(d))
+        } catch {
+          case e: Throwable => {
+            println("error: " + e.getStackTraceString)
+            None
+          }
+        }
       }
 
-      val dateFilter = parseFloat(element._2.get("lowerDate").toString) match {
-        case Some(dbDate) => {
-          val startDate = new Date(dbDate)
+      val dateFilter = parseDate(element._2.get("lowerDate").toString) match {
+        case Some(startDate) => {
           startDate.compareTo(start) * end.compareTo(startDate) >= 0
         }
         case _ => false
       }
       if(dateFilter) {
-        val purchasesFilter = Json.parse(element._2.get("purchases").toString).as[JsArray].value.size == 1
         val platformsFilter = Json.parse(element._2.get("purchasesPerPlatform").toString).as[JsArray].value
           .filter(e => platforms.contains((e \ "platform").as[String]))
           .map(p => {
+            // filter only the purchases that are between start and end
             val purchases = (p \ "purchases").as[JsArray].value.toList
             val filter = paymentSystems map {system =>
-              purchases.count(pp => (pp \ "paymentSystem").as[Int] == system) == 1
+              purchases.count(pp => {
+                /** Checks if the current purchases belongs to the payment system. Then:
+                  - Check if number of purchases 
+                 **/
+                if((pp \ "paymentSystem").as[Double].toInt == system) {
+                  val numberCriteria = (pp \ "paymentSystem").as[Double].toInt == 1
+                  val purchaseDate = (pp \ "time" \ "$date").as[Date]
+                  val dateCriteria = (purchaseDate.equals(start) || purchaseDate.after(start)) && (purchaseDate.equals(end) || purchaseDate.before(end))
+                  numberCriteria || dateCriteria
+                } else {
+                  false
+                }
+              }) > 0
             }
             ((p \ "platform").as[String], filter.exists(_ == true))
           })
-        if(purchasesFilter) {
-          true
-        } else {
           platformsFilter.exists(_._2)
-        }
       } else {
         false
       }

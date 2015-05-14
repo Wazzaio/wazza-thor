@@ -82,31 +82,25 @@ class TotalRevenue(
             val price = arg._2.get("price").toString.toDouble
             (paymentSystem, price)
           }).reduceByKey(_ + _)
+
           val totalRevenue = totalRevenuePerPaymentSystem.values.reduce(_ + _)
           val paymentSystemResults = totalRevenuePerPaymentSystem.collect.toList map {el =>
-            new PaymentSystemResult(el._1.toInt, el._2)
+            new PaymentSystemResult(el._1.toDouble.toInt, el._2)
           }
           new PlatformResults(rdd._1, totalRevenue, Some(paymentSystemResults))
         } else {
-          null
+          new PlatformResults(rdd._1, 0.0, Some(paymentSystems map {p => new PaymentSystemResult(p, 0.0)}))
         }
       } else {
-        null
+        new PlatformResults(rdd._1, 0.0, Some(paymentSystems map {p => new PaymentSystemResult(p, 0.0)}))
       }
     }
-
+      
     // Calculates total results and persist them
-    val results = if(!platformResults.exists(_ == null)) {
+    val results = {
       val totalRevenue = platformResults.foldLeft(0.0)(_ + _.res)
       new Results(totalRevenue, platformResults, lowerDate, upperDate)
-    } else {
-      log.info("Count is zero")
-      new Results(0.0,
-        platforms map {new PlatformResults(_, 0.0, Some(paymentSystems map {p => new PaymentSystemResult(p, 0.0)}))},
-        lowerDate,
-        upperDate
-      )
-    } 
+    }
     saveResultToDatabase(ThorContext.URI, outputCollection, results)
     promise.success()
     promise.future

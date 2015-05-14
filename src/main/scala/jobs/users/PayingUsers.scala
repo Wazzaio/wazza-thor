@@ -1,5 +1,6 @@
 package wazza.thor.jobs
 
+import akka.event.LoggingAdapter
 import com.typesafe.config.{Config, ConfigFactory}
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -35,19 +36,24 @@ object PayingUsers {
     lowerDate: Date,
     upperDate: Date,
     platforms: List[String],
-    paymentSystems: List[Int]
+    paymentSystems: List[Int],
+    log: LoggingAdapter
   ): RDD[UserPurchases] = {
     rdd.map(purchases => {
       def parseDate(d: String): Option[Date] = {
         try {
-          val Format = "E MMM dd HH:mm:ss Z yyyy"
-          Some(new SimpleDateFormat(Format).parse(d))
-        } catch {case _: Throwable => None }
+          Some(new Date(d.toDouble.toLong))
+        } catch {
+          case e: Throwable => {
+            //log.error(e.getMessage)
+            None
+          }
+        }
       }
 
       val time = parseDate(purchases._2.get("time").toString)
       val platform = (Json.parse(purchases._2.get("device").toString) \ "osType").as[String]
-      val paymentSystem = purchases._2.get("paymentSystem").toString.toInt
+      val paymentSystem = purchases._2.get("paymentSystem").toString.toDouble.toInt
       val info = new PurchaseInfo(purchases._2.get("id").toString, time.get, Some(platform), paymentSystem)
       (purchases._2.get("userId").toString, info)
     }).groupByKey.map(purchaseInfo => {
@@ -82,7 +88,7 @@ case class PurchaseInfo(
   def compare(that: PurchaseInfo): Int = this.time.compareTo(that.time)
 }
 
-sealed case class UserPurchases(
+case class UserPurchases(
   userId: String,
   totalPurchases: List[PurchaseInfo],
   purchasesPerPlatform: List[PlatformPurchases],
@@ -187,9 +193,13 @@ class PayingUsers(
      ).filter(t => {
        def parseDate(d: String): Option[Date] = {
          try {
-           val Format = "E MMM dd HH:mm:ss Z yyyy"
-           Some(new SimpleDateFormat(Format).parse(d))
-         } catch {case _: Throwable => None }
+           Some(new Date(d.toDouble.toLong))
+         } catch {
+           case e: Throwable => {
+             println("error: " + e.getMessage())
+             None
+           }
+         }
        }
 
        val dateStr = t._2.get("time").toString
@@ -202,7 +212,7 @@ class PayingUsers(
      })
 
      val result = if(rdd.count() > 0) {
-       PayingUsers.mapRDD(rdd, lowerDate, upperDate, platforms, paymentSystems).collect.toList
+       PayingUsers.mapRDD(rdd, lowerDate, upperDate, platforms, paymentSystems, log).collect.toList
      } else {
        List[UserPurchases]()
      }
